@@ -127,104 +127,104 @@ thread-list limit.")
 ;;; Generated autoloads from codex-ide-mcp-bridge.el
 
 (defvar codex-ide-enable-emacs-tool-bridge nil
-  "Whether codex-ide should expose Emacs tools to Codex via MCP.
+"Whether codex-ide should expose Emacs tools to Codex via MCP.
 
 When non-nil, codex-ide starts an MCP bridge server alongside `codex app-server'
 and ensures the current Emacs instance is reachable via `emacsclient'.")
 (custom-autoload 'codex-ide-enable-emacs-tool-bridge "codex-ide-mcp-bridge" t)
 (defvar codex-ide-want-mcp-bridge 'prompt
-  "Whether codex-ide should start the Emacs MCP bridge.
+"Whether codex-ide should start the Emacs MCP bridge.
 
 When nil, do not start the bridge.  When t, start the bridge without prompting.
 When `prompt', ask before enabling the bridge, matching the historical startup
 behavior.")
 (custom-autoload 'codex-ide-want-mcp-bridge "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-tool-bridge-name "codex-ide-emacs-mcp"
-  "Name used when registering the Emacs MCP bridge with Codex.")
+"Name used when registering the Emacs MCP bridge with Codex.")
 (custom-autoload 'codex-ide-emacs-tool-bridge-name "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-bridge-python-command "python3"
-  "Python executable used to launch the standalone Emacs MCP bridge.")
+"Python executable used to launch the standalone Emacs MCP bridge.")
 (custom-autoload 'codex-ide-emacs-bridge-python-command "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-bridge-emacsclient-command "emacsclient"
-  "Path to the `emacsclient' executable used by the bridge.")
+"Path to the `emacsclient' executable used by the bridge.")
 (custom-autoload 'codex-ide-emacs-bridge-emacsclient-command "codex-ide-mcp-bridge" t)
 (defvar codex-ide-mcp-bridge-buffer-slice-text-limit 50000
-  "Maximum number of characters returned by one buffer slice request.")
+"Maximum number of characters returned by one buffer slice request.")
 (custom-autoload 'codex-ide-mcp-bridge-buffer-slice-text-limit "codex-ide-mcp-bridge" t)
 (defvar codex-ide-mcp-bridge-enforce-file-roots t
-  "Whether bridge file tools should be constrained to allowed roots.")
+"Whether bridge file tools should be constrained to allowed roots.")
 (custom-autoload 'codex-ide-mcp-bridge-enforce-file-roots "codex-ide-mcp-bridge" t)
 (defvar codex-ide-mcp-bridge-allowed-roots nil
-  "Additional local roots bridge file tools may access.
+"Additional local roots bridge file tools may access.
 
 Session startup automatically passes the session working directory as an
 allowed root.  This option is for explicit extra roots.")
 (custom-autoload 'codex-ide-mcp-bridge-allowed-roots "codex-ide-mcp-bridge" t)
 (defvar codex-ide-mcp-bridge-buffer-text-limit codex-ide-mcp-bridge-buffer-slice-text-limit
-  "Maximum number of characters returned by a full buffer text request.")
+"Maximum number of characters returned by a full buffer text request.")
 (custom-autoload 'codex-ide-mcp-bridge-buffer-text-limit "codex-ide-mcp-bridge" t)
 (defvar codex-ide-mcp-bridge-allow-sensitive-state nil
-  "Whether bridge tools may expose Messages and active minibuffer contents.")
+"Whether bridge tools may expose Messages and active minibuffer contents.")
 (custom-autoload 'codex-ide-mcp-bridge-allow-sensitive-state "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-bridge-script-path nil
-  "Path to the standalone Emacs MCP bridge script.
+"Path to the standalone Emacs MCP bridge script.
 
 When nil, codex-ide uses `bin/codex-ide-mcp-server.py' from the package directory.")
 (custom-autoload 'codex-ide-emacs-bridge-script-path "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-bridge-server-name nil
-  "Server name the bridge should use with `emacsclient'.
+"Server name the bridge should use with `emacsclient'.
 
 When nil, use the current value of `server-name'.")
 (custom-autoload 'codex-ide-emacs-bridge-server-name "codex-ide-mcp-bridge" t)
 (defvar codex-ide-suppress-server-start-prompts nil
-  "When non-nil, start the Emacs server for the bridge without prompting.
+"When non-nil, start the Emacs server for the bridge without prompting.
 
 This only affects explicit calls to `codex-ide-mcp-bridge-ensure-server'.  Session
 startup now prompts once about enabling the Emacs tool bridge, and enabling the
 bridge starts the Emacs server automatically when needed.")
 (custom-autoload 'codex-ide-suppress-server-start-prompts "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-bridge-startup-timeout 10
-  "Startup timeout in seconds for the Emacs MCP bridge.")
+"Startup timeout in seconds for the Emacs MCP bridge.")
 (custom-autoload 'codex-ide-emacs-bridge-startup-timeout "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-bridge-tool-timeout 60
-  "Tool-call timeout in seconds for the Emacs MCP bridge.")
+"Tool-call timeout in seconds for the Emacs MCP bridge.")
 (custom-autoload 'codex-ide-emacs-bridge-tool-timeout "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-bridge-require-approval t
-  "Whether Emacs MCP bridge tool calls should require user approval.
+"Whether Emacs MCP bridge tool calls should require user approval.
 
 When nil, `codex-ide' auto-accepts approval-like MCP elicitations that clearly
 refer to the configured Emacs MCP bridge server or one of its tools.")
 (custom-autoload 'codex-ide-emacs-bridge-require-approval "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-bridge-auto-approved-tools '("emacs_get_all_buffers" "emacs_get_buffer_info" "emacs_get_buffer_diagnostics" "emacs_get_symbol_at_point" "emacs_describe_symbol" "emacs_get_all_windows")
-  "Bridge tools eligible for approval auto-exemption when approvals are disabled.")
+"Bridge tools eligible for approval auto-exemption when approvals are disabled.")
 (custom-autoload 'codex-ide-emacs-bridge-auto-approved-tools "codex-ide-mcp-bridge" t)
 (autoload 'codex-ide-mcp-bridge-request-exempt-from-approval-p "codex-ide-mcp-bridge"
-  "Return non-nil when PARAMS describe an Emacs MCP bridge request.
+"Return non-nil when PARAMS describe an Emacs MCP bridge request.
 
 This is used to bypass bridge-originated elicitation prompts when
 `codex-ide-emacs-bridge-require-approval' is nil.
 
 (fn PARAMS)")
 (autoload 'codex-ide-mcp-bridge-enabled-p "codex-ide-mcp-bridge"
-  "Return non-nil when the Emacs MCP bridge should be enabled.")
+"Return non-nil when the Emacs MCP bridge should be enabled.")
 (autoload 'codex-ide-mcp-bridge-enable "codex-ide-mcp-bridge"
-  "Enable the Emacs MCP bridge and ensure the target Emacs server is running.")
+"Enable the Emacs MCP bridge and ensure the target Emacs server is running.")
 (autoload 'codex-ide-mcp-bridge-disable "codex-ide-mcp-bridge"
-  "Disable the Emacs MCP bridge.")
+"Disable the Emacs MCP bridge.")
 (autoload 'codex-ide-mcp-bridge-prompt-to-enable "codex-ide-mcp-bridge"
-  "Prompt once to enable the Emacs MCP bridge for session startup.")
+"Prompt once to enable the Emacs MCP bridge for session startup.")
 (autoload 'codex-ide-mcp-bridge-status "codex-ide-mcp-bridge"
-  "Return an alist describing the current Emacs bridge configuration.")
+"Return an alist describing the current Emacs bridge configuration.")
 (autoload 'codex-ide-mcp-bridge-ensure-server "codex-ide-mcp-bridge"
-  "Ensure the target Emacs server for the bridge is running.")
+"Ensure the target Emacs server for the bridge is running.")
 (autoload 'codex-ide-mcp-bridge-mcp-config-args "codex-ide-mcp-bridge"
-  "Return `codex app-server' CLI args that register the Emacs MCP bridge.
+"Return `codex app-server' CLI args that register the Emacs MCP bridge.
 
 When WORKING-DIR is non-nil, pass it to the bridge server as an allowed root.
 
 (fn &optional WORKING-DIR)")
 (autoload 'codex-ide-mcp-bridge--json-tool-call "codex-ide-mcp-bridge"
-  "Decode JSON PAYLOAD, dispatch a bridge tool call, and return JSON.
+"Decode JSON PAYLOAD, dispatch a bridge tool call, and return JSON.
 
 (fn PAYLOAD)")
 (register-definition-prefixes "codex-ide-mcp-bridge" '("codex-ide-mcp-bridge-"))
@@ -478,19 +478,19 @@ while 1 would fully replace the background with the foreground color.")
 ;;; Generated autoloads from codex-ide-session.el
 
 (autoload 'codex-ide "codex-ide-session"
-  "Start Codex for the current project or directory." t)
+"Start Codex for the current project or directory." t)
 (autoload 'codex-ide-continue "codex-ide-session"
-  "Resume the most recent Codex session for the current directory." t)
+"Resume the most recent Codex session for the current directory." t)
 (autoload 'codex-ide-show-cli-info "codex-ide-session"
-  "Report Codex CLI availability and version." t)
+"Report Codex CLI availability and version." t)
 (autoload 'codex-ide-stop "codex-ide-session"
-  "Stop the Codex session associated with the current session buffer." t)
+"Stop the Codex session associated with the current session buffer." t)
 (autoload 'codex-ide-reset-current-session "codex-ide-session"
-  "Stop the current Codex session and start a new one in the same buffer." t)
+"Stop the current Codex session and start a new one in the same buffer." t)
 (autoload 'codex-ide-switch-to-buffer "codex-ide-session"
-  "Show the Codex buffer for the current project." t)
+"Show the Codex buffer for the current project." t)
 (autoload 'codex-ide-interrupt "codex-ide-session"
-  "Interrupt the active Codex turn for the current project." t)
+"Interrupt the active Codex turn for the current project." t)
 (register-definition-prefixes "codex-ide-session" '("codex-ide--"))
 
 
