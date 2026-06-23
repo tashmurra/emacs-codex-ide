@@ -16,9 +16,8 @@ from typing import Any
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "codex-ide-emacs-bridge", "version": "0.1.0"}
-DEBUG_LOG_PATH = "/tmp/codex-ide-mcp-debug.log"
+DEBUG_LOG_PATH: str | None = None
 DEFAULT_EMACSCLIENT_TIMEOUT_SEC = 55.0
-DEBUG_VALUE_PREVIEW_BYTES = 512
 
 
 @dataclass(frozen=True)
@@ -233,17 +232,22 @@ def json_dumps(value: Any) -> bytes:
 
 
 def debug_log(*parts: object) -> None:
+    if not DEBUG_LOG_PATH:
+        return
     try:
-        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as handle:
+        fd = os.open(DEBUG_LOG_PATH, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        except OSError:
+            pass
+        with os.fdopen(fd, "a", encoding="utf-8") as handle:
             print(*parts, file=handle)
     except OSError:
         pass
 
 
 def debug_bytes(label: str, value: bytes) -> None:
-    preview = repr(value[:DEBUG_VALUE_PREVIEW_BYTES])
-    suffix = " (truncated)" if len(value) > DEBUG_VALUE_PREVIEW_BYTES else ""
-    debug_log(f"{label}: {len(value)} bytes {preview}{suffix}")
+    debug_log(f"{label}: {len(value)} bytes")
 
 
 def parse_json_message(body: bytes) -> dict[str, Any]:
@@ -260,7 +264,7 @@ def read_header_framed_message(first_line: bytes) -> dict[str, Any]:
     content_length: int | None = None
     line = first_line
     while True:
-        debug_log("stdin header bytes:", repr(line))
+        debug_bytes("stdin header", line)
         if line in (b"\r\n", b"\n"):
             break
         try:
@@ -282,7 +286,7 @@ def read_header_framed_message(first_line: bytes) -> dict[str, Any]:
     if content_length is None:
         raise ProtocolError(-32700, "Parse error: missing Content-Length")
     body = sys.stdin.buffer.read(content_length)
-    debug_log("stdin body bytes:", repr(body))
+    debug_bytes("stdin body", body)
     if len(body) != content_length:
         raise ProtocolError(-32700, "Parse error: EOF while reading message body")
     return parse_json_message(body)
@@ -291,7 +295,7 @@ def read_header_framed_message(first_line: bytes) -> dict[str, Any]:
 def read_message() -> dict[str, Any] | None:
     while True:
         line = sys.stdin.buffer.readline()
-        debug_log("stdin line bytes:", repr(line))
+        debug_bytes("stdin line", line)
         if not line:
             debug_log("stdin closed before message")
             return None
@@ -310,16 +314,31 @@ def write_message(payload: dict[str, Any]) -> None:
 
 
 class EmacsProxy:
-    def __init__(self, emacsclient: str, server_name: str | None, timeout_sec: float) -> None:
+    def __init__(
+        self,
+        emacsclient: str,
+        server_name: str | None,
+        timeout_sec: float,
+        allowed_roots: list[str],
+    ) -> None:
         self.emacsclient = emacsclient
         self.server_name = server_name
         self.timeout_sec = timeout_sec
+        self.allowed_roots = allowed_roots
 
     def _elisp_string(self, value: str) -> str:
         return json.dumps(value, ensure_ascii=True)
 
     def _tool_call_expression(self, name: str, params: dict[str, Any]) -> str:
-        payload = json.dumps({"name": name, "params": params}, separators=(",", ":"), ensure_ascii=True)
+        payload = json.dumps(
+            {
+                "name": name,
+                "params": params,
+                "meta": {"allowedRoots": self.allowed_roots},
+            },
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
         return (
             "(base64-encode-string "
             f"(encode-coding-string (codex-ide-mcp-bridge--json-tool-call {self._elisp_string(payload)}) 'utf-8) t)"
@@ -331,7 +350,12 @@ class EmacsProxy:
         if self.server_name:
             command.extend(["-s", self.server_name])
         command.extend(["--eval", self._tool_call_expression(name, params)])
-        debug_log("dispatch command:", command)
+        debug_log(
+            "dispatch command:",
+            f"argc={len(command)}",
+            f"server_name={'set' if self.server_name else 'default'}",
+            f"allowed_roots={len(self.allowed_roots)}",
+        )
         started = time.monotonic()
         try:
             completed = subprocess.run(
@@ -416,17 +440,34 @@ def error_response(code: int, message: str, request_id: Any = None) -> dict[str,
 
 
 def main() -> int:
+    global DEBUG_LOG_PATH
     debug_log("--- mcp process start ---")
-    debug_log("argv:", sys.argv)
-    debug_log("cwd:", os.getcwd())
     parser = argparse.ArgumentParser()
     parser.add_argument("--emacsclient", default="emacsclient")
     parser.add_argument("--server-name", default=None)
     parser.add_argument("--emacsclient-timeout", type=float, default=DEFAULT_EMACSCLIENT_TIMEOUT_SEC)
+    parser.add_argument(
+        "--allowed-root",
+        action="append",
+        default=[],
+        help="Emacs-visible filesystem root allowed for bridge file tools. May be repeated.",
+    )
+    parser.add_argument(
+        "--debug-log",
+        default=None,
+        help="Optional path for redacted bridge diagnostics. Logging is disabled by default.",
+    )
     args = parser.parse_args()
-    debug_log("parsed args:", args)
+    DEBUG_LOG_PATH = args.debug_log
+    debug_log("--- mcp process start ---")
+    debug_log(
+        "parsed args:",
+        f"server_name={'set' if args.server_name else 'default'}",
+        f"allowed_roots={len(args.allowed_root)}",
+        f"timeout={args.emacsclient_timeout:g}",
+    )
 
-    proxy = EmacsProxy(args.emacsclient, args.server_name, args.emacsclient_timeout)
+    proxy = EmacsProxy(args.emacsclient, args.server_name, args.emacsclient_timeout, args.allowed_root)
 
     while True:
         try:
