@@ -29,6 +29,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'codex-ide-core)
+(require 'codex-ide-mention)
 
 (defvar codex-ide-emacs-context-policy 'all
   "Which Emacs context blocks to include in submitted prompts.")
@@ -53,8 +54,8 @@ When WORKING-DIR is nil, infer the project directory from BUFFER."
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
         (when-let* ((working-dir (codex-ide--normalize-directory
-                                 (or working-dir
-                                     (codex-ide--get-working-directory)))))
+                                  (or working-dir
+                                      (codex-ide--get-working-directory)))))
           (let ((file-path (buffer-file-name)))
             `((file . ,(and file-path (expand-file-name file-path)))
               (buffer-name . ,(buffer-name))
@@ -115,7 +116,7 @@ The return value contains 1-based line numbers and 0-based columns."
 (defun codex-ide--format-session-context ()
   "Format the one-time session baseline prompt block."
   (when-let* ((prompt (and (stringp codex-ide-session-baseline-prompt)
-                          (string-trim codex-ide-session-baseline-prompt))))
+                           (string-trim codex-ide-session-baseline-prompt))))
     (unless (string-empty-p prompt)
       (format (concat "%s\n"
                       "Take the following into account in this prompt and all following ones:\n"
@@ -225,7 +226,11 @@ Return an alist containing either `(buffer . BUFFER)' or `(discarded . t)'."
 
 (defun codex-ide--push-prompt-history (session prompt)
   "Record PROMPT in SESSION history."
-  (let ((trimmed (string-trim-right prompt)))
+  (let ((trimmed
+         (string-trim-right
+          (codex-ide-mention-encode-history
+           (or prompt "")
+           session))))
     (unless (string-empty-p trimmed)
       (codex-ide--project-persisted-put
        :prompt-history
@@ -245,8 +250,8 @@ Return an alist containing either `(buffer . BUFFER)' or `(discarded . t)'."
     (cond
      (context-buffer
       (when-let* ((context (codex-ide--make-buffer-context
-                           context-buffer
-                           :working-dir working-dir)))
+                            context-buffer
+                            :working-dir working-dir)))
         (unless codex-ide--prompt-origin-buffer
           (puthash working-dir context codex-ide--active-buffer-contexts))
         (let* ((context-with-selection
@@ -308,7 +313,11 @@ When SUPPRESS-CONTEXT is non-nil, omit Emacs session and prompt context."
          (prompt-prefix (unless (codex-ide--leading-emacs-context-prefix-p prompt)
                           context-prefix))
          (full-prompt (string-join (delq nil (list session-prefix prompt-prefix prompt))
-                                   "\n\n")))
+                                   "\n\n"))
+         (skill-input-items
+          (codex-ide-mention-input-items
+           (or prompt "")
+           session)))
     `((context-summary . ,(alist-get 'summary context-payload))
       (included-session-context . ,(and session-prefix t))
       (input . ,(vconcat
@@ -316,7 +325,8 @@ When SUPPRESS-CONTEXT is non-nil, omit Emacs session and prompt context."
                            (text . ,full-prompt)))
                  (codex-ide--local-image-input-items
                   local-images
-                  image-detail))))))
+                  image-detail)
+                 skill-input-items)))))
 
 (cl-defun codex-ide--compose-turn-input
     (prompt &key local-images image-detail suppress-context)
