@@ -28,6 +28,7 @@
 (require 'codex-ide-approvals-data)
 (require 'codex-ide-core)
 (require 'codex-ide-diff-data)
+(require 'codex-ide-mention)
 (require 'codex-ide-nav)
 (require 'codex-ide-renderer)
 (require 'codex-ide-slash-command)
@@ -44,6 +45,18 @@
 (defvar corfu-mode)
 (defvar corfu-on-exact-match)
 
+(defconst codex-ide-session-mode--transcript-detail-kind-property
+  'codex-ide-transcript-detail-kind
+  "Text property identifying semantic transcript detail regions.")
+
+(defconst codex-ide-session-mode--transcript-item-detail-kind
+  'item-detail
+  "Detail kind used for compact-hideable transcript rows.")
+
+(defconst codex-ide-session-mode--transcript-compact-hidden
+  'codex-ide-transcript-compact-hidden
+  "Invisible property value used for compact transcript detail rows.")
+
 (defvar codex-ide-session-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map text-mode-map)
@@ -58,6 +71,10 @@
   (make-sparse-keymap)
   "Keymap for `codex-ide-session-slash-command-minor-mode'.")
 
+(defvar codex-ide-session-mention-minor-mode-map
+  (make-sparse-keymap)
+  "Keymap for `codex-ide-session-mention-minor-mode'.")
+
 (defvar codex-ide-session-approval-minor-mode-map
   (make-sparse-keymap)
   "Keymap for `codex-ide-session-approval-minor-mode'.")
@@ -67,6 +84,7 @@
 (define-key codex-ide-session-mode-map (kbd "C-c C-d") #'codex-ide-session-diff-open)
 (define-key codex-ide-session-mode-map (kbd "C-c C-k") #'codex-ide-interrupt)
 (define-key codex-ide-session-mode-map (kbd "C-c C-p") #'codex-ide-apply-config-preset)
+(define-key codex-ide-session-mode-map (kbd "C-c C-v") #'codex-ide-session-transcript-toggle-detail-level)
 (define-key codex-ide-session-mode-map (kbd "C-M-p") #'codex-ide-previous-prompt-line)
 (define-key codex-ide-session-mode-map (kbd "C-M-n") #'codex-ide-next-prompt-line)
 (define-key codex-ide-session-mode-map (kbd "TAB") #'codex-ide-session-mode-nav-forward)
@@ -76,6 +94,9 @@
 (define-key codex-ide-session-slash-command-minor-mode-map
             (kbd "RET")
             #'codex-ide-slash-command-complete-or-submit)
+(define-key codex-ide-session-mention-minor-mode-map
+            (kbd "RET")
+            #'codex-ide-mention-complete-or-newline)
 (define-key codex-ide-session-prompt-minor-mode-map (kbd "DEL") #'codex-ide-delete-backward-or-remove-attached-image)
 (define-key codex-ide-session-prompt-minor-mode-map (kbd "<backspace>") #'codex-ide-delete-backward-or-remove-attached-image)
 (define-key codex-ide-session-prompt-minor-mode-map (kbd "<delete>") #'codex-ide-delete-forward-or-remove-attached-image)
@@ -112,6 +133,20 @@
 (defvar-local codex-ide-session-mode--slash-command-auto-completing nil
   "Non-nil while slash command auto-completion is invoking completion.")
 
+(defvar-local codex-ide-session-mode--mention-auto-completing nil
+  "Non-nil while mention auto-completion is invoking completion.")
+
+(defcustom codex-ide-session-transcript-default-detail-level 'standard
+  "Default detail level for Codex session transcript buffers."
+  :type '(choice (const :tag "Standard" standard)
+                 (const :tag "Compact" compact))
+  :group 'codex-ide)
+
+(defvar-local codex-ide-session-transcript-detail-level
+  codex-ide-session-transcript-default-detail-level
+  "Current detail level for this Codex session transcript buffer.
+The value is either `standard' or `compact'.")
+
 (define-minor-mode codex-ide-session-prompt-minor-mode
   "Minor mode enabled only while point is in the active Codex prompt."
   :lighter " Prompt"
@@ -121,6 +156,11 @@
   "Minor mode enabled while editing a Codex slash command prompt."
   :lighter " Slash"
   :keymap codex-ide-session-slash-command-minor-mode-map)
+
+(define-minor-mode codex-ide-session-mention-minor-mode
+  "Minor mode enabled while editing a Codex prompt mention."
+  :lighter " Mention"
+  :keymap codex-ide-session-mention-minor-mode-map)
 
 (define-minor-mode codex-ide-session-approval-minor-mode
   "Minor mode enabled while a Codex approval is pending."
@@ -234,6 +274,22 @@
       (unless (eq active codex-ide-session-slash-command-minor-mode)
         (codex-ide-session-slash-command-minor-mode (if active 1 -1))))))
 
+(defun codex-ide-session-mode--mention-input-p (&optional session)
+  "Return non-nil when point is in a mention completion context."
+  (setq session (or session (and (boundp 'codex-ide--session) codex-ide--session)))
+  (and session
+       (codex-ide-mention-active-completion-p session)))
+
+(defun codex-ide-session-mode-sync-mention-minor-mode (&optional session)
+  "Enable or disable prompt mention editing mode for SESSION."
+  (setq session (or session (and (boundp 'codex-ide--session) codex-ide--session)))
+  (when (derived-mode-p 'codex-ide-session-mode)
+    (let ((active (and session
+                       codex-ide-session-prompt-minor-mode
+                       (codex-ide-session-mode--mention-input-p session))))
+      (unless (eq active codex-ide-session-mention-minor-mode)
+        (codex-ide-session-mention-minor-mode (if active 1 -1))))))
+
 (defun codex-ide-session-mode--show-slash-command-completions ()
   "Show slash command completions using the active completion frontend."
   (let ((codex-ide-slash-command--suppress-completion-submit t))
@@ -247,6 +303,19 @@
              (codex-ide-session-mode--preserve-sole-completion-prefix
               (nth 2 capf)))))
       (completion-help-at-point))))
+
+(defun codex-ide-session-mode--show-mention-completions ()
+  "Show mention completions using the active completion frontend."
+  (if (bound-and-true-p corfu-mode)
+      (when-let* ((capf (codex-ide-mention-completion-at-point)))
+        (let ((completion-extra-properties (nthcdr 3 capf))
+              (corfu-on-exact-match 'show))
+          (completion-in-region
+           (nth 0 capf)
+           (nth 1 capf)
+           (codex-ide-session-mode--preserve-sole-completion-prefix
+            (nth 2 capf)))))
+    (completion-help-at-point)))
 
 (defun codex-ide-session-mode--preserve-sole-completion-prefix (table)
   "Return completion TABLE with sole-match prefix expansion disabled.
@@ -280,6 +349,16 @@ replace a partial slash command with the sole matching command name."
              (codex-ide-slash-command-completion-at-point))
     (let ((codex-ide-session-mode--slash-command-auto-completing t))
       (codex-ide-session-mode--show-slash-command-completions))))
+
+(defun codex-ide-session-mode--maybe-complete-mention ()
+  "Automatically show completion while typing a prompt mention."
+  (codex-ide-session-mode-sync-mention-minor-mode)
+  (when (and codex-ide-session-mention-minor-mode
+             (not codex-ide-session-mode--mention-auto-completing)
+             (not (bound-and-true-p completion-in-region-mode))
+             (codex-ide-mention-completion-at-point))
+    (let ((codex-ide-session-mode--mention-auto-completing t))
+      (codex-ide-session-mode--show-mention-completions))))
 
 (defun codex-ide-session-mode--focal-points ()
   "Return focal points for the current session buffer."
@@ -516,6 +595,148 @@ so users can navigate within those controls without opting out of follow mode."
                #'codex-ide-session-mode--teardown-table-resize
                t))
 
+(defun codex-ide-session-mode--valid-detail-level-p (level)
+  "Return non-nil when LEVEL is a valid transcript detail level."
+  (memq level '(standard compact)))
+
+(defun codex-ide-session-mode--read-detail-level ()
+  "Read a transcript detail level from the minibuffer."
+  (intern
+   (completing-read
+    "Transcript detail level: "
+    '("standard" "compact")
+    nil
+    t
+    nil
+    nil
+    (symbol-name codex-ide-session-transcript-detail-level))))
+
+(defun codex-ide-session-mode--add-compact-invisibility (value)
+  "Return invisible VALUE with compact transcript invisibility added."
+  (cond
+   ((null value) codex-ide-session-mode--transcript-compact-hidden)
+   ((eq value t) value)
+   ((eq value codex-ide-session-mode--transcript-compact-hidden) value)
+   ((listp value)
+    (if (memq codex-ide-session-mode--transcript-compact-hidden value)
+        value
+      (cons codex-ide-session-mode--transcript-compact-hidden value)))
+   (t
+    (list codex-ide-session-mode--transcript-compact-hidden value))))
+
+(defun codex-ide-session-mode--remove-compact-invisibility (value)
+  "Return invisible VALUE with compact transcript invisibility removed."
+  (cond
+   ((eq value codex-ide-session-mode--transcript-compact-hidden) nil)
+   ((and (listp value)
+         (memq codex-ide-session-mode--transcript-compact-hidden value))
+    (let ((remaining (delq codex-ide-session-mode--transcript-compact-hidden
+                           (copy-sequence value))))
+      (cond
+       ((null remaining) nil)
+       ((null (cdr remaining)) (car remaining))
+       (t remaining))))
+   (t value)))
+
+(defun codex-ide-session-mode--compact-detail-region-p (pos)
+  "Return non-nil when POS is in a compact-hideable transcript detail region."
+  (eq (get-text-property pos codex-ide-session-mode--transcript-detail-kind-property)
+      codex-ide-session-mode--transcript-item-detail-kind))
+
+(defun codex-ide-session-mode--apply-detail-level-to-region (start end compact)
+  "Apply transcript detail visibility between START and END.
+When COMPACT is non-nil, hide item detail regions.  Otherwise reveal them."
+  (let ((pos start))
+    (while (< pos end)
+      (let ((next
+             (min
+              (or (next-single-property-change
+                   pos
+                   codex-ide-session-mode--transcript-detail-kind-property
+                   nil
+                   end)
+                  end)
+              (or (next-single-property-change pos 'invisible nil end)
+                  end))))
+        (when (codex-ide-session-mode--compact-detail-region-p pos)
+          (let* ((current (get-text-property pos 'invisible))
+                 (updated
+                  (if compact
+                      (codex-ide-session-mode--add-compact-invisibility current)
+                    (codex-ide-session-mode--remove-compact-invisibility current))))
+            (unless (equal current updated)
+              (put-text-property pos next 'invisible updated))))
+        (setq pos next)))))
+
+(defun codex-ide-session-mode--capture-window-state ()
+  "Capture current buffer window positions."
+  (mapcar
+   (lambda (window)
+     (list :window window
+           :start (copy-marker (window-start window))
+           :point (copy-marker (window-point window))))
+   (get-buffer-window-list (current-buffer) nil t)))
+
+(defun codex-ide-session-mode--restore-window-state (states)
+  "Restore current buffer window STATES."
+  (dolist (state states)
+    (let ((window (plist-get state :window))
+          (start (plist-get state :start))
+          (point (plist-get state :point)))
+      (unwind-protect
+          (when (and (window-live-p window)
+                     (eq (window-buffer window) (current-buffer))
+                     (markerp start)
+                     (markerp point)
+                     (marker-buffer start)
+                     (marker-buffer point))
+            (set-window-start window (marker-position start) t)
+            (set-window-point window (marker-position point)))
+        (when (markerp start)
+          (set-marker start nil))
+        (when (markerp point)
+          (set-marker point nil))))))
+
+(defun codex-ide-session-mode-refresh-transcript-detail-visibility ()
+  "Refresh transcript detail visibility for the current buffer."
+  (interactive)
+  (unless (derived-mode-p 'codex-ide-session-mode)
+    (user-error "Not in a Codex session buffer"))
+  (let ((compact (eq codex-ide-session-transcript-detail-level 'compact))
+        (window-states (codex-ide-session-mode--capture-window-state)))
+    (unwind-protect
+        (let ((inhibit-read-only t))
+          (if compact
+              (add-to-invisibility-spec codex-ide-session-mode--transcript-compact-hidden)
+            (remove-from-invisibility-spec codex-ide-session-mode--transcript-compact-hidden))
+          (codex-ide-session-mode--apply-detail-level-to-region
+           (point-min)
+           (point-max)
+           compact))
+      (codex-ide-session-mode--restore-window-state window-states))))
+
+;;;###autoload
+(defun codex-ide-session-transcript-set-detail-level (level)
+  "Set the current session transcript detail LEVEL.
+Interactively, prompt for LEVEL.  LEVEL must be `standard' or `compact'."
+  (interactive (list (codex-ide-session-mode--read-detail-level)))
+  (unless (derived-mode-p 'codex-ide-session-mode)
+    (user-error "Not in a Codex session buffer"))
+  (unless (codex-ide-session-mode--valid-detail-level-p level)
+    (user-error "Invalid transcript detail level: %s" level))
+  (setq-local codex-ide-session-transcript-detail-level level)
+  (codex-ide-session-mode-refresh-transcript-detail-visibility)
+  (message "Codex transcript detail: %s" level))
+
+;;;###autoload
+(defun codex-ide-session-transcript-toggle-detail-level ()
+  "Toggle the current session transcript between standard and compact detail."
+  (interactive)
+  (codex-ide-session-transcript-set-detail-level
+   (if (eq codex-ide-session-transcript-detail-level 'compact)
+       'standard
+     'compact)))
+
 ;;;###autoload
 (define-derived-mode codex-ide-session-mode text-mode "Codex-IDE"
   "Major mode for Codex app-server session buffers.
@@ -527,6 +748,8 @@ so users can navigate within those controls without opting out of follow mode."
 * \\[codex-ide-session-diff-open] opens the session diff buffer.
 
 * \\[codex-ide-apply-config-preset] prompts for and applies a config preset.
+
+* \\[codex-ide-session-transcript-toggle-detail-level] toggles standard/compact transcript detail.
 
 * \\[codex-ide-previous-prompt-line] and \\[codex-ide-next-prompt-line] move between prompt lines.
 
@@ -541,7 +764,12 @@ adds these bindings:
 When the active prompt begins with a slash,
 `codex-ide-session-slash-command-minor-mode' adds this binding:
 
-* \\<codex-ide-session-slash-command-minor-mode-map>\\[codex-ide-slash-command-complete-or-submit] completes or submits the slash command."
+* \\<codex-ide-session-slash-command-minor-mode-map>\\[codex-ide-slash-command-complete-or-submit] completes or submits the slash command.
+
+When point is in a prompt mention,
+`codex-ide-session-mention-minor-mode' adds this binding:
+
+* \\<codex-ide-session-mention-minor-mode-map>\\[codex-ide-mention-complete-or-newline] completes a skill mention or inserts a newline."
   (codex-ide--disable-session-font-lock)
   (setq-local truncate-lines nil)
   (when codex-ide-session-enable-visual-line-mode
@@ -552,12 +780,23 @@ When the active prompt begins with a slash,
               '(codex-ide-session-mode--focal-points))
   (setq-local imenu-create-index-function
               #'codex-ide-session-mode--imenu-create-index)
+  (setq-local codex-ide-session-transcript-detail-level
+              codex-ide-session-transcript-default-detail-level)
+  (codex-ide-session-mode-refresh-transcript-detail-visibility)
   (add-hook 'completion-at-point-functions
             #'codex-ide-slash-command-completion-at-point
             nil
             t)
+  (add-hook 'completion-at-point-functions
+            #'codex-ide-mention-completion-at-point
+            nil
+            t)
   (add-hook 'post-self-insert-hook
             #'codex-ide-session-mode--maybe-complete-slash-command
+            nil
+            t)
+  (add-hook 'post-self-insert-hook
+            #'codex-ide-session-mode--maybe-complete-mention
             nil
             t)
   (setq-local codex-ide-session-mode--last-point (point))
@@ -574,6 +813,10 @@ When the active prompt begins with a slash,
   (add-hook 'post-command-hook #'codex-ide--sync-prompt-minor-mode nil t)
   (add-hook 'post-command-hook
             #'codex-ide-session-mode-sync-slash-command-minor-mode
+            nil
+            t)
+  (add-hook 'post-command-hook
+            #'codex-ide-session-mode-sync-mention-minor-mode
             nil
             t)
   (add-hook 'post-command-hook

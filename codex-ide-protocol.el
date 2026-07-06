@@ -202,6 +202,16 @@
           ,@(when include-turns
               '((includeTurns . t))))))
 
+(defun codex-ide--skills-list-params (&optional session force-reload)
+  "Build `skills/list` params for SESSION.
+When FORCE-RELOAD is non-nil, ask app-server to bypass its skills cache."
+  (let ((directory (and session (codex-ide-session-directory session))))
+    (delq nil
+          `(,@(when directory
+                `((cwds . ,(vector directory))))
+            ,@(when force-reload
+                '((forceReload . t)))))))
+
 (defun codex-ide--read-thread (&optional session thread-id include-turns)
   "Read stored metadata for THREAD-ID using SESSION."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
@@ -214,6 +224,30 @@
    session
    "thread/read"
    (codex-ide--thread-read-params thread-id include-turns)))
+
+(defun codex-ide--list-skills (&optional session force-reload)
+  "List available skills using SESSION.
+When FORCE-RELOAD is non-nil, ask app-server to re-scan skills from disk."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (unless session
+    (error "No Codex session available"))
+  (codex-ide--request-sync
+   session
+   "skills/list"
+   (codex-ide--skills-list-params session force-reload)))
+
+(defun codex-ide--list-skills-async (session force-reload callback)
+  "List available skills for SESSION asynchronously.
+When FORCE-RELOAD is non-nil, ask app-server to re-scan skills from disk.
+CALLBACK is called with RESULT and ERROR."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (unless session
+    (error "No Codex session available"))
+  (codex-ide--request-async
+   session
+   "skills/list"
+   (codex-ide--skills-list-params session force-reload)
+   callback))
 
 (defun codex-ide--extract-thread-id (result)
   "Extract the thread id from RESULT."
@@ -491,7 +525,7 @@ SORT-KEY is nil, sort by `updated_at'."
                  (mapcar (lambda (model)
                            (or (alist-get 'model model)
                                (alist-get 'id model)))
-                        models)))))
+                         models)))))
     (error nil)))
 
 (defun codex-ide--fast-service-tier (&optional session)

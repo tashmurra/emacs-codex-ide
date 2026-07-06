@@ -34,6 +34,7 @@
 (require 'subr-x)
 (require 'codex-ide-context)
 (require 'codex-ide-core)
+(require 'codex-ide-mention)
 (require 'codex-ide-errors)
 (require 'codex-ide-header)
 (require 'codex-ide-log)
@@ -239,6 +240,8 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
      (capabilities . ((experimentalApi . t)
                       ,@(codex-ide-mcp-elicitation-capabilities)))))
   (codex-ide--set-session-status session "idle" 'initialized)
+  (unless (codex-ide--query-only-session-p session)
+    (codex-ide-mention-refresh-skill-cache session))
   (codex-ide-log-message session "Initialization complete")
   (codex-ide--update-header-line session))
 
