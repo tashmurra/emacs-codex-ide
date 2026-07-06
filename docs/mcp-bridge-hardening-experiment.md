@@ -138,6 +138,22 @@ only low-risk metadata tools are eligible for auto-approval:
 Content-bearing, file-opening, search, messages, minibuffer, and buffer-kill
 tools are never auto-exempted by this experiment.
 
+### Skill mention paths require cached skills by default
+
+After integrating upstream skill mentions, linked or history-decoded `$skill`
+mentions only become structured skill input items when their target path matches
+the current session's cached skill list.
+
+Users who explicitly want upstream's broader cold-cache linked-path behavior can
+opt in:
+
+```emacs-lisp
+(setq codex-ide-mention-allow-uncached-skill-paths t)
+```
+
+Mentions selected through completion keep their recorded binding even before a
+refreshed skill cache is available.
+
 ## Compatibility Notes
 
 These defaults are intentionally stricter than the original bridge behavior.
@@ -152,6 +168,8 @@ Users may notice:
 - `emacs_get_messages` is disabled unless sensitive state access is opted in
 - bridge tool calls prompt for approval unless the user explicitly disables
   approval and the tool is on the metadata allow-list
+- linked `$skill` history entries with uncached paths remain visible Markdown
+  unless `codex-ide-mention-allow-uncached-skill-paths` is enabled
 
 The compatibility escape hatches are explicit defcustoms rather than preserving
 broader access as the default.
@@ -170,6 +188,7 @@ The branch adds ERT coverage for:
 - absence of default Python debug logs
 - redacted opt-in debug logs
 - internal forwarding of `--allowed-root` metadata
+- cached and uncached skill mention path handling
 
 Validated with:
 
