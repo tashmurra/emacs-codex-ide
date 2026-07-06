@@ -21,6 +21,18 @@
       (mapc #'walk index))
     (nreverse labels)))
 
+(defun codex-ide-session-mode-test--store-mention-skills (session)
+  "Store a single mention completion skill for SESSION."
+  (codex-ide--session-metadata-put
+   session
+   :skills-list
+   '(((name . "imagegen")
+      (description . "Generate images.")
+      (enabled . t)
+      (path . "/tmp/imagegen/SKILL.md")
+      (scope . "user"))))
+  (codex-ide--session-metadata-put session :skills-list-state 'ready))
+
 (ert-deftest codex-ide-session-mode-docstring-lists-key-bindings ()
   (let ((doc (documentation #'codex-ide-session-mode t)))
     (dolist (binding '("* \\<codex-ide-session-mode-map>\\[codex-ide-submit]"
@@ -30,7 +42,8 @@
                        "* \\[codex-ide-previous-prompt-line]"
                        "* \\[codex-ide-session-mode-nav-forward]"
                        "* \\<codex-ide-session-prompt-minor-mode-map>\\[codex-ide-previous-prompt-history]"
-                       "* \\<codex-ide-session-slash-command-minor-mode-map>\\[codex-ide-slash-command-complete-or-submit]"))
+                       "* \\<codex-ide-session-slash-command-minor-mode-map>\\[codex-ide-slash-command-complete-or-submit]"
+                       "* \\<codex-ide-session-mention-minor-mode-map>\\[codex-ide-mention-complete-or-newline]"))
       (should (string-match-p (regexp-quote binding) doc)))))
 
 (ert-deftest codex-ide-session-mode-binds-session-diff-open ()
@@ -53,12 +66,27 @@
     (should (memq #'codex-ide-session-mode-sync-slash-command-minor-mode
                   post-command-hook))))
 
+(ert-deftest codex-ide-session-mode-installs-mention-auto-completion ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (should (memq #'codex-ide-session-mode--maybe-complete-mention
+                  post-self-insert-hook))
+    (should (memq #'codex-ide-session-mode-sync-mention-minor-mode
+                  post-command-hook))))
+
 (ert-deftest codex-ide-session-mode-slash-command-mode-binds-ret-to-complete-or-submit ()
   (with-temp-buffer
     (codex-ide-session-mode)
     (codex-ide-session-slash-command-minor-mode 1)
     (should (eq (key-binding (kbd "RET"))
                 #'codex-ide-slash-command-complete-or-submit))))
+
+(ert-deftest codex-ide-session-mode-mention-mode-binds-ret-to-complete-or-newline ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (codex-ide-session-mention-minor-mode 1)
+    (should (eq (key-binding (kbd "RET"))
+                #'codex-ide-mention-complete-or-newline))))
 
 (ert-deftest codex-ide-session-mode-enables-slash-command-mode-for-leading-slash ()
   (with-temp-buffer
@@ -94,6 +122,45 @@
         (insert "hello"))
       (codex-ide-session-mode-sync-slash-command-minor-mode session)
       (should-not codex-ide-session-slash-command-minor-mode))))
+
+(ert-deftest codex-ide-session-mode-enables-mention-mode-for-leading-dollar ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((codex-ide--session-metadata (make-hash-table :test 'eq))
+          (session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle")))
+      (setq-local codex-ide--session session)
+      (codex-ide-session-mode-test--store-mention-skills session)
+      (codex-ide--insert-input-prompt session nil)
+      (goto-char (codex-ide-session-input-start-marker session))
+      (insert "$")
+      (codex-ide--sync-prompt-minor-mode session)
+      (codex-ide-session-mode-sync-mention-minor-mode session)
+      (should codex-ide-session-mention-minor-mode))))
+
+(ert-deftest codex-ide-session-mode-disables-mention-mode-without-leading-dollar ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((codex-ide--session-metadata (make-hash-table :test 'eq))
+          (session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle")))
+      (setq-local codex-ide--session session)
+      (codex-ide-session-mode-test--store-mention-skills session)
+      (codex-ide--insert-input-prompt session nil)
+      (goto-char (codex-ide-session-input-start-marker session))
+      (insert "$")
+      (codex-ide--sync-prompt-minor-mode session)
+      (codex-ide-session-mode-sync-mention-minor-mode session)
+      (should codex-ide-session-mention-minor-mode)
+      (let ((inhibit-read-only t))
+        (delete-region (codex-ide-session-input-start-marker session)
+                       (1+ (marker-position
+                            (codex-ide-session-input-start-marker session))))
+        (insert "hello"))
+      (codex-ide-session-mode-sync-mention-minor-mode session)
+      (should-not codex-ide-session-mention-minor-mode))))
 
 (ert-deftest codex-ide-session-mode-auto-completes-leading-slash-command ()
   (with-temp-buffer
@@ -171,6 +238,78 @@
       (should (eq exact-match 'show))
       (should (equal try-result '("m" . 1)))
       (should (equal candidates '("model")))
+      (should-not completion-help-called))))
+
+(ert-deftest codex-ide-session-mode-auto-completes-leading-mention ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((codex-ide--session-metadata (make-hash-table :test 'eq))
+          (session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"))
+          completion-at-point-called
+          completion-help-called)
+      (setq-local codex-ide--session session)
+      (codex-ide-session-mode-test--store-mention-skills session)
+      (codex-ide--insert-input-prompt session nil)
+      (goto-char (codex-ide-session-input-start-marker session))
+      (insert "$")
+      (cl-letf (((symbol-function 'completion-at-point)
+                 (lambda ()
+                   (setq completion-at-point-called t)))
+                ((symbol-function 'completion-help-at-point)
+                 (lambda ()
+                   (setq completion-help-called t))))
+        (let ((previous-event last-command-event))
+          (unwind-protect
+              (progn
+                (setq last-command-event ?$)
+                (codex-ide-session-mode--maybe-complete-mention))
+            (setq last-command-event previous-event))))
+      (should codex-ide-session-mention-minor-mode)
+      (should completion-help-called)
+      (should-not completion-at-point-called))))
+
+(ert-deftest codex-ide-session-mode-auto-completes-leading-mention-with-corfu ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((codex-ide--session-metadata (make-hash-table :test 'eq))
+          (session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"))
+          completion-help-called
+          completion-in-region-called
+          exact-match
+          try-result
+          candidates)
+      (setq-local codex-ide--session session)
+      (setq-local corfu-mode t)
+      (codex-ide-session-mode-test--store-mention-skills session)
+      (codex-ide--insert-input-prompt session nil)
+      (goto-char (codex-ide-session-input-start-marker session))
+      (insert "$i")
+      (cl-letf (((symbol-function 'completion-in-region)
+                 (lambda (_beg _end table &optional pred)
+                   (setq completion-in-region-called t)
+                   (setq exact-match corfu-on-exact-match)
+                   (setq try-result
+                         (completion-try-completion "i" table pred 1))
+                   (setq candidates
+                         (all-completions "i" table pred))))
+                ((symbol-function 'completion-help-at-point)
+                 (lambda ()
+                   (setq completion-help-called t))))
+        (let ((previous-event last-command-event))
+          (unwind-protect
+              (progn
+                (setq last-command-event ?i)
+                (codex-ide-session-mode--maybe-complete-mention))
+            (setq last-command-event previous-event))))
+      (should codex-ide-session-mention-minor-mode)
+      (should completion-in-region-called)
+      (should (eq exact-match 'show))
+      (should (equal try-result '("i" . 1)))
+      (should (equal candidates '("imagegen")))
       (should-not completion-help-called))))
 
 (ert-deftest codex-ide-session-mode-preserve-sole-completion-prefix-lists-candidates ()

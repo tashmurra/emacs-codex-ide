@@ -43,6 +43,7 @@
 (require 'codex-ide-approvals-data)
 (require 'codex-ide-context)
 (require 'codex-ide-core)
+(require 'codex-ide-mention)
 (require 'codex-ide-header)
 (require 'codex-ide-protocol)
 (require 'codex-ide-diff-data)
@@ -108,6 +109,21 @@
 
 (defvar codex-ide--current-agent-item-type nil
   "Item type associated with the agent transcript text being inserted.")
+
+(defvar codex-ide--current-item-detail-marker nil
+  "Marker before the current item section's compact-hideable footer.")
+
+(defconst codex-ide-transcript-detail-kind-property
+  'codex-ide-transcript-detail-kind
+  "Text property identifying semantic transcript detail regions.")
+
+(defconst codex-ide-transcript-item-detail-kind
+  'item-detail
+  "Detail kind used for collapsible item detail rows.")
+
+(defconst codex-ide-transcript-compact-hidden
+  'codex-ide-transcript-compact-hidden
+  "Invisible property value used for compact transcript detail rows.")
 
 (defvar codex-ide--preserve-transcript-window-follow-anchor t
   "When non-nil, transcript window restoration may keep following the anchor.
@@ -315,6 +331,15 @@ record the resulting end position with
      (list codex-ide-log-marker-property codex-ide--current-transcript-log-marker))
    (when (stringp codex-ide--current-agent-item-type)
      (list codex-ide-agent-item-type-property codex-ide--current-agent-item-type))))
+
+(defun codex-ide--item-detail-text-properties (&optional properties)
+  "Return text PROPERTIES with semantic item-detail metadata appended."
+  (append properties
+          (list codex-ide-transcript-detail-kind-property
+                codex-ide-transcript-item-detail-kind)
+          (when (and (boundp 'codex-ide-session-transcript-detail-level)
+                     (eq codex-ide-session-transcript-detail-level 'compact))
+            (list 'invisible codex-ide-transcript-compact-hidden))))
 
 (defun codex-ide--freeze-region (start end)
   "Make the region from START to END read-only."
@@ -974,6 +999,39 @@ When FACE is non-nil, use it for the inserted line."
    face
    (append properties (codex-ide--current-agent-text-properties))))
 
+(defun codex-ide--append-item-detail-text (buffer text &optional face properties)
+  "Append semantic item detail TEXT to BUFFER.
+FACE defaults to `codex-ide-item-detail-face'."
+  (if-let* ((marker (codex-ide--item-detail-target-marker buffer)))
+      (codex-ide--insert-item-detail-text-at-marker
+       buffer
+       marker
+       text
+       face
+       properties)
+    (codex-ide--append-agent-text
+     buffer
+     text
+     (or face 'codex-ide-item-detail-face)
+     (codex-ide--item-detail-text-properties properties))))
+
+(defun codex-ide--insert-item-detail-text-at-marker
+    (buffer marker text &optional face properties)
+  "Insert semantic item detail TEXT in BUFFER at MARKER.
+Move MARKER after the inserted text."
+  (codex-ide--insert-agent-text-at-marker
+   buffer
+   marker
+   text
+   (or face 'codex-ide-item-detail-face)
+   (codex-ide--item-detail-text-properties properties)))
+
+(defun codex-ide--item-detail-target-marker (buffer)
+  "Return the active item detail insertion marker for BUFFER, if any."
+  (and (markerp codex-ide--current-item-detail-marker)
+       (eq (marker-buffer codex-ide--current-item-detail-marker) buffer)
+       codex-ide--current-item-detail-marker))
+
 (defun codex-ide--insert-agent-text-at-marker
     (buffer marker text &optional face properties)
   "Insert agent-originated TEXT in BUFFER at MARKER.
@@ -1009,6 +1067,21 @@ Move MARKER after the inserted text."
                (codex-ide--ensure-active-input-prompt-spacing session))
              (codex-ide--transcript-render-context-note-position
               (marker-position marker))))))))))
+
+(defun codex-ide--append-item-detail-footer (buffer)
+  "Append a compact-hideable item detail footer to BUFFER.
+Return a marker before the footer.  Later item details should be inserted at
+the returned marker so the footer remains the final detail character."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (let ((marker nil))
+        (when-let* ((range
+                     (codex-ide--append-item-detail-text
+                      buffer
+                      "\n"
+                      'codex-ide-item-detail-face)))
+          (setq marker (copy-marker (car range) t)))
+        marker))))
 
 (defun codex-ide--ensure-output-spacing (buffer)
   "Ensure BUFFER is ready for a new rendered output block."
@@ -2154,7 +2227,11 @@ DIRECTION should be -1 for older history and 1 for newer history."
             (setf (codex-ide-session-prompt-history-index session) nil)
             (codex-ide--replace-current-input session ""))
         (setf (codex-ide-session-prompt-history-index session) index)
-        (codex-ide--replace-current-input session (nth index history))))))
+        (codex-ide--replace-current-input
+         session
+         (codex-ide-mention-decode-history
+          (nth index history)
+          session))))))
 
 (defun codex-ide--goto-prompt-line (direction)
   "Move point to another user prompt line in DIRECTION.
@@ -2887,6 +2964,14 @@ incrementally for transcript rendering."
   (or (overlay-get overlay :open-function)
       #'codex-ide--open-item-result-overlay))
 
+(defun codex-ide--mark-compact-detail-region (start end)
+  "Mark transcript text between START and END as compact-hideable detail."
+  (when (< start end)
+    (add-text-properties
+     start
+     end
+     (codex-ide--item-detail-text-properties))))
+
 (defun codex-ide--local-transcript-overlay-end (overlay)
   "Return the local insertion continuation point for item-result OVERLAY."
   (when (and (codex-ide--local-transcript-insertion-p)
@@ -2949,6 +3034,59 @@ continuation point after BODY.  Otherwise restore RESTORE-POINT or move to
     (or (codex-ide--item-result-state-full-text state item-type)
         (codex-ide--item-result-overlay-full-text overlay)
         "")))
+
+(defun codex-ide--item-result-display-source-text (overlay full-text)
+  "Return the source text used for OVERLAY's inline display body."
+  (pcase (overlay-get overlay :item-type)
+    ("mcpToolCall"
+     (codex-ide--mcp-result-display-text full-text))
+    (_ full-text)))
+
+(defun codex-ide--materialize-item-result-display-text (overlay)
+  "Compute and cache OVERLAY's inline display text on demand."
+  (let* ((full-text (or (codex-ide--item-result-text overlay) ""))
+         (display-output-text
+          (codex-ide--item-result-display-source-text overlay full-text))
+         (visible-range
+          (codex-ide--command-output-render-range display-output-text))
+         (visible-output
+          (substring display-output-text
+                     (car visible-range)
+                     (cdr visible-range)))
+         (truncated (> (car visible-range) 0))
+         (display-text
+          (or (codex-ide--format-command-output-text visible-output truncated)
+              (and truncated
+                   (codex-ide--command-output-truncation-notice))
+              "")))
+    (overlay-put overlay :display-text display-text)
+    (overlay-put overlay :result-full-text full-text)
+    (overlay-put overlay :lazy-display-text nil)
+    (overlay-put overlay :line-count
+                 (codex-ide--command-output-line-count display-output-text))
+    (overlay-put overlay :visible-line-count
+                 (codex-ide--command-output-line-count visible-output))
+    (overlay-put overlay :truncated truncated)
+    (overlay-put overlay :body-properties
+                 (or (overlay-get overlay :body-properties)
+                     (codex-ide--current-agent-text-properties)))
+    (when-let* ((session (overlay-get overlay :session))
+                (item-id (overlay-get overlay :item-id))
+                (state (codex-ide--item-state session item-id)))
+      (setq state (plist-put state :result-full-text full-text))
+      (setq state (plist-put state :result-display-text display-output-text))
+      (codex-ide--put-item-state session item-id state))
+    display-text))
+
+(defun codex-ide--item-result-display-text (overlay)
+  "Return OVERLAY's inline display text, materializing lazy text if needed."
+  (let ((display-text (overlay-get overlay :display-text)))
+    (cond
+     ((and (overlay-get overlay :lazy-display-text)
+           (not (stringp display-text)))
+      (codex-ide--materialize-item-result-display-text overlay))
+     ((stringp display-text) display-text)
+     (t ""))))
 
 (defun codex-ide--item-result-buffer-name (overlay)
   "Return the buffer name for full item result OVERLAY."
@@ -3018,10 +3156,12 @@ Return non-nil when OVERLAY was toggled."
           (codex-ide--preserve-transcript-window-follow-anchor nil))
       (overlay-put overlay :folded folded)
       (overlay-put overlay 'invisible (and folded t))
-      (codex-ide--set-item-result-header overlay)
-      (codex-ide--set-item-result-body
-       overlay
-       (or (overlay-get overlay :display-text) ""))
+      (let ((display-text
+             (if folded
+                 (or (overlay-get overlay :display-text) "")
+               (codex-ide--item-result-display-text overlay))))
+        (codex-ide--set-item-result-header overlay)
+        (codex-ide--set-item-result-body overlay display-text))
       t)))
 
 (defun codex-ide-open-item-result-at-point (&optional pos)
@@ -3089,6 +3229,7 @@ Return non-nil when an item result block was found."
                    :open-button-label (overlay-get overlay :open-button-label)
                    :open-button-help (overlay-get overlay :open-button-help)
                    :open-button-keymap (codex-ide-nav-button-keymap)))
+                (codex-ide--mark-compact-detail-region start (point))
                 (set-marker header-start start)
                 (set-marker header-end (point))
                 (set-marker body-start (point))
@@ -3173,7 +3314,9 @@ When OVERLAY is folded, remove the body text from the transcript buffer."
                       (restore-point (codex-ide--input-point-marker session))
                       (moving (and (= (point) (point-max)) (not restore-point)))
                       (anchor (or (plist-get state :item-result-anchor-marker)
-                                  (plist-get state :command-output-anchor-marker)))
+                                  (plist-get state :command-output-anchor-marker)
+                                  (plist-get state :item-detail-marker)))
+                      (detail-marker (plist-get state :item-detail-marker))
                       (local-context
                        (codex-ide--local-transcript-render-context))
                       (local-insertion
@@ -3268,6 +3411,9 @@ When OVERLAY is folded, remove the body text from the transcript buffer."
 								:toggle-button-help (overlay-get overlay :toggle-button-help)
 								:open-button-label (overlay-get overlay :open-button-label)
 								:open-button-help (overlay-get overlay :open-button-help)))
+							     (codex-ide--mark-compact-detail-region
+							      (marker-position header-start)
+							      (point))
 							     (setq header-end (copy-marker (point)))
 							     (setq body-start (copy-marker (point)))
 							     (setq body-end (copy-marker (point)))
@@ -3282,7 +3428,8 @@ When OVERLAY is folded, remove the body text from the transcript buffer."
 							      (point))
 							     (when advance-active-boundary
 							       (set-marker active-boundary (point)))
-							     (when (markerp anchor)
+							     (when (and (markerp anchor)
+									(not (eq anchor detail-marker)))
 							       (set-marker anchor nil))
 							     (codex-ide--with-item-result-transcript-mutation
 							      overlay restore-point moving)))))))
@@ -3464,6 +3611,34 @@ full text needed by open buttons must live on the overlay as
      (or (codex-ide--command-output-state-full-text state) output)))
   (codex-ide--complete-item-result-block session item-id output))
 
+(defun codex-ide--complete-restored-item-result-block-lazily
+    (session item-id output)
+  "Restore ITEM-ID's completed result without rendering OUTPUT inline."
+  (when (and (stringp output)
+             (not (string-empty-p output)))
+    (let* ((state (copy-tree (or (codex-ide--item-state session item-id) '())))
+           (line-count (codex-ide--command-output-line-count output)))
+      (setq state (plist-put state :result-full-text output))
+      (setq state (plist-put state :result-display-text nil))
+      (setq state (plist-put state :item-result-initial-folded t))
+      (codex-ide--put-item-state session item-id state)
+      (when-let* ((overlay (codex-ide--ensure-item-result-block session item-id)))
+        (overlay-put overlay :result-full-text output)
+        (overlay-put overlay :display-text nil)
+        (overlay-put overlay :lazy-display-text t)
+        (overlay-put overlay :line-count line-count)
+        (overlay-put overlay :visible-line-count line-count)
+        (overlay-put overlay :truncated nil)
+        (overlay-put overlay :complete t)
+        (overlay-put overlay :folded t)
+        (overlay-put overlay 'invisible t)
+        (overlay-put overlay :body-properties
+                     (codex-ide--current-agent-text-properties))
+        (codex-ide--set-item-result-header overlay)
+        (codex-ide--set-item-result-body overlay "")
+        (codex-ide--ensure-active-input-prompt-spacing session)
+        overlay))))
+
 (defun codex-ide--item-result-overlay-at-point (&optional pos)
   "Return the item result overlay at POS, or nil."
   (let* ((pos (or pos (point)))
@@ -3490,11 +3665,43 @@ Return non-nil when an item result block was found."
 			(codex-ide--display-command-argv command))))
     (codex-ide--search-summary (car request) (cadr request))))
 
+(defconst codex-ide--command-summary-preview-max-width 96
+  "Maximum display width for generic command summary previews.")
+
+(defun codex-ide--truncate-display-string (text max-width)
+  "Return TEXT truncated to MAX-WIDTH display columns with ellipsis."
+  (if (<= (string-width text) max-width)
+      text
+    (let ((ellipsis "...")
+          (pos 0)
+          (width 0)
+          (limit (max 0 (- max-width 3))))
+      (while (and (< pos (length text))
+                  (<= (+ width (char-width (aref text pos))) limit))
+        (setq width (+ width (char-width (aref text pos)))
+              pos (1+ pos)))
+      (concat (substring text 0 pos) ellipsis))))
+
+(defun codex-ide--command-summary-preview (command)
+  "Return a single-line preview for COMMAND in generic summaries."
+  (let* ((display-command (codex-ide--display-command-string command))
+         (single-line
+          (replace-regexp-in-string
+           "[\r\n]+"
+           "↵"
+           (string-trim (or display-command "")))))
+    (if (string-empty-p single-line)
+        "command"
+      (codex-ide--truncate-display-string
+       single-line
+       codex-ide--command-summary-preview-max-width))))
+
 (defun codex-ide--command-summary (command)
   "Return the user-facing summary for shell COMMAND."
   (or (codex-ide--command-read-summary command)
       (codex-ide--command-search-summary command)
-      "Ran command"))
+      (format "Ran command: %s"
+              (codex-ide--command-summary-preview command))))
 
 (defun codex-ide--item-detail-line (text)
   "Format TEXT as an indented detail line."
@@ -3568,15 +3775,11 @@ Return the rendered detail line strings."
       (let ((text (mapconcat #'codex-ide--item-detail-line lines "")))
         (if (and (markerp insertion-marker)
                  (eq (marker-buffer insertion-marker) buffer))
-            (codex-ide--insert-agent-text-at-marker
+            (codex-ide--insert-item-detail-text-at-marker
              buffer
              insertion-marker
-             text
-             'codex-ide-item-detail-face)
-          (codex-ide--append-agent-text
-           buffer
-           text
-           'codex-ide-item-detail-face))))
+             text)
+          (codex-ide--append-item-detail-text buffer text))))
     lines))
 
 (defun codex-ide--append-shell-command-detail (buffer command)
@@ -3591,7 +3794,11 @@ Return the rendered detail line strings."
               (moving (= (point) (point-max)))
               (original-point (copy-marker (point) t))
               (active-boundary (codex-ide--active-input-boundary-marker buffer))
-              (insertion-position (codex-ide--transcript-insertion-position buffer))
+              (target-marker (codex-ide--item-detail-target-marker buffer))
+              (insertion-position
+               (if target-marker
+                   (marker-position target-marker)
+                 (codex-ide--transcript-insertion-position buffer)))
               (advance-active-boundary
                (and active-boundary
                     (= insertion-position (marker-position active-boundary))))
@@ -3605,7 +3812,10 @@ Return the rendered detail line strings."
                  (cdr
                   (codex-ide-renderer-insert-shell-command-detail
                    command
-                   (codex-ide--current-agent-text-properties))))
+                   (append (codex-ide--item-detail-text-properties)
+                           (codex-ide--current-agent-text-properties)))))
+           (when target-marker
+             (set-marker target-marker end))
            (codex-ide--finish-transcript-append
             buffer
             insertion-position
@@ -4098,7 +4308,11 @@ CONTEXT is either nil for ordinary transcript rendering or `approval'."
              (restore-point (codex-ide--input-point-marker session))
              (moving (and (= (point) (point-max)) (not restore-point)))
              (active-boundary (codex-ide--active-input-boundary-marker buffer))
-             (insertion-position (codex-ide--transcript-insertion-position buffer))
+             (target-marker (codex-ide--item-detail-target-marker buffer))
+             (insertion-position
+              (if target-marker
+                  (marker-position target-marker)
+                (codex-ide--transcript-insertion-position buffer)))
              (advance-active-boundary
               (and active-boundary
                    (= insertion-position (marker-position active-boundary))))
@@ -4125,16 +4339,31 @@ CONTEXT is either nil for ordinary transcript rendering or `approval'."
                         'font-lock-face 'codex-ide-item-detail-face
                         'rear-nonsticky t
                         'front-sticky t))
-               (add-text-properties start (point) props)
-               (insert (propertize " " 'face 'codex-ide-item-detail-face))
+               (add-text-properties
+                start
+                (point)
+                (codex-ide--item-detail-text-properties props))
+               (insert
+                (propertize
+                 " "
+                 'face 'codex-ide-item-detail-face
+                 codex-ide-transcript-detail-kind-property
+                 codex-ide-transcript-item-detail-kind))
                (codex-ide-renderer-insert-action-button
                 button-label
                 callback
                 help-echo
                 (codex-ide-nav-button-keymap)
-                props)
-               (insert (propertize "\n" 'face 'codex-ide-item-detail-face))
+                (codex-ide--item-detail-text-properties props))
+               (insert
+                (propertize
+                 "\n"
+                 'face 'codex-ide-item-detail-face
+                 codex-ide-transcript-detail-kind-property
+                 codex-ide-transcript-item-detail-kind))
                (setq range (cons start (point)))
+               (when target-marker
+                 (set-marker target-marker (point)))
                (codex-ide--freeze-region start (point))
                (codex-ide--finish-transcript-append
                 buffer
@@ -4154,7 +4383,7 @@ When COMPLETION is non-nil, render completion-specific state details."
         ((append-detail
            (text face)
            (let ((range
-                  (codex-ide--append-agent-text
+                  (codex-ide--append-item-detail-text
                    buffer
                    (codex-ide--item-detail-line text)
                    (or face 'codex-ide-item-detail-face))))
@@ -4216,45 +4445,40 @@ When COMPLETION is non-nil, render completion-specific state details."
           (codex-ide--display-command-string (alist-get 'command item))))
        (when-let* ((cwd (alist-get 'cwd item))
                    ((codex-ide--command-cwd-detail-visible-p session cwd)))
-         (codex-ide--append-agent-text
+         (codex-ide--append-item-detail-text
           buffer
           (codex-ide--item-detail-line
-           (format "cwd: %s" (abbreviate-file-name cwd)))
-          'codex-ide-item-detail-face)))
+           (format "cwd: %s" (abbreviate-file-name cwd))))))
       ("webSearch"
        (codex-ide--render-web-search-details session item))
       ("mcpToolCall"
        (when-let* ((arguments (alist-get 'arguments item)))
-         (codex-ide--append-agent-text
+         (codex-ide--append-item-detail-text
           buffer
           (codex-ide--item-detail-line
-           (format "args: %s" (json-encode arguments)))
-          'codex-ide-item-detail-face)))
+           (format "args: %s" (json-encode arguments))))))
       ("dynamicToolCall"
        (when-let* ((arguments (alist-get 'arguments item)))
-         (codex-ide--append-agent-text
+         (codex-ide--append-item-detail-text
           buffer
           (codex-ide--item-detail-line
-           (format "args: %s" (json-encode arguments)))
-          'codex-ide-item-detail-face)))
+           (format "args: %s" (json-encode arguments))))))
       ("collabAgentToolCall"
        (codex-ide--render-collab-agent-details buffer item nil session
                                                (alist-get 'id item)))
       ("fileChange"
        (dolist (change (or (alist-get 'changes item) '()))
-         (codex-ide--append-agent-text
+         (codex-ide--append-item-detail-text
           buffer
           (codex-ide--item-detail-line
            (format "%s %s"
                    (or (alist-get 'kind change) "change")
-                   (or (alist-get 'path change) "unknown")))
-          'codex-ide-item-detail-face)))
+                   (or (alist-get 'path change) "unknown"))))))
       ("imageView"
        (when-let* ((path (alist-get 'path item)))
-         (codex-ide--append-agent-text
+         (codex-ide--append-item-detail-text
           buffer
-          (codex-ide--item-detail-line path)
-          'codex-ide-item-detail-face))))))
+          (codex-ide--item-detail-line path)))))))
 
 (defun codex-ide--render-item-start (&optional session item)
   "Render a newly started ITEM for SESSION."
@@ -4275,12 +4499,16 @@ When COMPLETION is non-nil, render completion-specific state details."
          buffer
          (format "* %s\n" summary)
          'codex-ide-item-summary-face)
-        (let ((rendered-detail-lines
-               (codex-ide--render-item-start-details session item)))
+        (let* ((detail-marker
+                (codex-ide--append-item-detail-footer buffer))
+               (rendered-detail-lines
+                (let ((codex-ide--current-item-detail-marker detail-marker))
+                  (codex-ide--render-item-start-details session item))))
           (let ((state existing-state))
             (setq state (plist-put state :type item-type))
             (setq state (plist-put state :item item))
             (setq state (plist-put state :summary summary))
+            (setq state (plist-put state :item-detail-marker detail-marker))
             (when rendered-detail-lines
               (setq state
                     (plist-put state
@@ -4298,16 +4526,13 @@ When COMPLETION is non-nil, render completion-specific state details."
             (when (member item-type
                           '("commandExecution" "mcpToolCall" "fileChange"
                             "webSearch" "collabAgentToolCall"))
-              ;; Keep delayed per-item output anchored directly after the item
-              ;; block; later transcript inserts should not move this placeholder
-              ;; forward.
+              ;; Keep delayed per-item output inside this item's detail region,
+              ;; before the compact-hideable footer newline.
               (setq state
                     (plist-put state
                                :item-result-anchor-marker
-                               (with-current-buffer buffer
-                                 (copy-marker
-                                  (codex-ide--transcript-insertion-position
-                                   buffer))))))
+                               (and (markerp detail-marker)
+                                    (copy-marker detail-marker t)))))
             (setq state
                   (plist-put state
                              :item-result-label
@@ -4320,7 +4545,8 @@ When COMPLETION is non-nil, render completion-specific state details."
               (setq state
                     (plist-put state
                                :command-output-anchor-marker
-                               (plist-get state :item-result-anchor-marker))))
+                               (and (markerp detail-marker)
+                                    (copy-marker detail-marker t)))))
             (setq state (plist-put state :saw-output nil))
             (codex-ide--put-item-state session item-id state))
           (when (plist-get (codex-ide--item-state session item-id)
@@ -4463,50 +4689,18 @@ When COMPLETION is non-nil, render completion-specific state details."
          (state (codex-ide--item-state session item-id))
          (item-type (alist-get 'type item))
          (status (alist-get 'status item)))
-    (let ((codex-ide--current-agent-item-type item-type))
+    (let ((codex-ide--current-agent-item-type item-type)
+          (codex-ide--current-item-detail-marker
+           (plist-get state :item-detail-marker)))
       (pcase item-type
         ("agentMessage"
          (codex-ide--render-current-agent-message-markdown session item-id t))
         ("commandExecution"
-         (let* ((search-request (plist-get state :search-request))
-                (output-text (or (codex-ide--command-output-state-full-text state)
-                                 (alist-get 'aggregatedOutput item)))
-                (exit-code (alist-get 'exitCode item)))
+         (let ((output-text (or (codex-ide--command-output-state-full-text state)
+                                (alist-get 'aggregatedOutput item))))
            (codex-ide--complete-command-output-block session item-id output-text)
-           (cond
-            (search-request
-             (when-let* ((hit-count (or (codex-ide--count-search-output-hits
-                                         output-text)
-					(and (equal exit-code 1) 0))))
-               (codex-ide--append-agent-text
-                buffer
-                (codex-ide--item-detail-line
-                 (codex-ide--format-hit-count hit-count))
-                'codex-ide-item-detail-face))
-             (when (and (equal status "failed")
-                        (not (equal exit-code 1)))
-               (codex-ide--append-agent-text
-                buffer
-                (codex-ide--item-detail-line
-                 (format "failed%s"
-                         (if exit-code
-                             (format " with exit code %s" exit-code)
-                           "")))
-                'error)))
-            ((equal status "failed")
-             (codex-ide--append-agent-text
-              buffer
-              (codex-ide--item-detail-line
-               (format "failed%s"
-                       (if exit-code
-                           (format " with exit code %s" exit-code)
-			 "")))
-              'error))
-            ((equal status "declined")
-             (codex-ide--append-agent-text
-              buffer
-              (codex-ide--item-detail-line "declined")
-              'warning)))))
+           (codex-ide--render-command-completion-details
+            session item output-text)))
         ("mcpToolCall"
          (when-let* ((result-text (codex-ide--mcp-result-text item)))
            (let ((state (or (codex-ide--item-state session item-id) '()))
@@ -4520,7 +4714,7 @@ When COMPLETION is non-nil, render completion-specific state details."
                :result-display-text display-text)))
            (codex-ide--complete-item-result-block session item-id result-text))
          (when-let* ((error-info (alist-get 'error item)))
-           (codex-ide--append-agent-text
+           (codex-ide--append-item-detail-text
             buffer
             (codex-ide--item-detail-line
              (format "error: %s"
@@ -4528,7 +4722,7 @@ When COMPLETION is non-nil, render completion-specific state details."
             'error)))
         ("dynamicToolCall"
          (when (eq (alist-get 'success item) :json-false)
-           (codex-ide--append-agent-text
+           (codex-ide--append-item-detail-text
             buffer
             (codex-ide--item-detail-line "tool call failed")
             'error)))
@@ -4600,7 +4794,7 @@ When COMPLETION is non-nil, render completion-specific state details."
                 streamed-diff)))))
         ("exitedReviewMode"
          (when-let* ((review (alist-get 'review item)))
-           (codex-ide--append-agent-text
+           (codex-ide--append-item-detail-text
             buffer
             (codex-ide--item-detail-block review)
             'codex-ide-item-detail-face)))))
@@ -4766,10 +4960,9 @@ Return non-nil when BUFFER is a Codex transcript and the reveal was handled."
     (codex-ide--append-to-buffer buffer (format "\n%s\n" summary) (or face 'error))
     (unless (string-empty-p detail)
       (let ((codex-ide--current-agent-item-type "error"))
-        (codex-ide--append-agent-text
+        (codex-ide--append-item-detail-text
          buffer
-         (codex-ide--item-detail-line detail)
-         'codex-ide-item-detail-face)))
+         (codex-ide--item-detail-line detail))))
     (when guidance
       (codex-ide--append-to-buffer buffer (format "%s\n" guidance) (or face 'error)))
     classification))
@@ -4875,16 +5068,265 @@ When CLOSING-NOTE is non-nil, append it before restoring the prompt."
         (codex-ide--render-item-completion session item))
       t)))
 
+(defun codex-ide--render-command-completion-details
+    (session item output-text)
+  "Render command ITEM completion details for SESSION."
+  (let* ((buffer (codex-ide-session-buffer session))
+         (item-id (alist-get 'id item))
+         (state (codex-ide--item-state session item-id))
+         (search-request (plist-get state :search-request))
+         (exit-code (alist-get 'exitCode item))
+         (status (alist-get 'status item)))
+    (cond
+     (search-request
+      (when-let* ((hit-count (or (codex-ide--count-search-output-hits
+                                  (or output-text ""))
+                                 (and (equal exit-code 1) 0))))
+        (codex-ide--append-item-detail-text
+         buffer
+         (codex-ide--item-detail-line
+          (codex-ide--format-hit-count hit-count))
+         'codex-ide-item-detail-face))
+      (when (and (equal status "failed")
+                 (not (equal exit-code 1)))
+        (codex-ide--append-item-detail-text
+         buffer
+         (codex-ide--item-detail-line
+          (format "failed%s"
+                  (if exit-code
+                      (format " with exit code %s" exit-code)
+                    "")))
+         'error)))
+     ((equal status "failed")
+      (codex-ide--append-item-detail-text
+       buffer
+       (codex-ide--item-detail-line
+        (format "failed%s"
+                (if exit-code
+                    (format " with exit code %s" exit-code)
+                  "")))
+       'error))
+     ((equal status "declined")
+      (codex-ide--append-item-detail-text
+       buffer
+       (codex-ide--item-detail-line "declined")
+       'warning)))))
+
+(defun codex-ide--render-restored-command-completion (session item)
+  "Render restored command ITEM completion for SESSION lazily."
+  (let* ((item-id (alist-get 'id item))
+         (output-text (alist-get 'aggregatedOutput item))
+         (codex-ide--current-agent-item-type "commandExecution"))
+    (codex-ide--complete-restored-item-result-block-lazily
+     session item-id output-text)
+    (codex-ide--render-command-completion-details
+     session item output-text)
+    (codex-ide--clear-item-state session item-id)
+    t))
+
+(defun codex-ide--render-restored-mcp-completion (session item)
+  "Render restored MCP ITEM completion for SESSION lazily."
+  (let* ((item-id (alist-get 'id item))
+         (result-text (codex-ide--mcp-result-text item))
+         (error-info (alist-get 'error item))
+         (codex-ide--current-agent-item-type "mcpToolCall"))
+    (codex-ide--complete-restored-item-result-block-lazily
+     session item-id result-text)
+    (when error-info
+      (codex-ide--append-agent-text
+       (codex-ide-session-buffer session)
+       (codex-ide--item-detail-line
+        (format "error: %s"
+                (or (alist-get 'message error-info) error-info)))
+       'error))
+    (codex-ide--clear-item-state session item-id)
+    t))
+
+(defun codex-ide--render-restored-item-completion (session item)
+  "Render restored ITEM completion for SESSION when a lazy path exists."
+  (pcase (alist-get 'type item)
+    ("commandExecution"
+     (codex-ide--render-restored-command-completion session item))
+    ("mcpToolCall"
+     (codex-ide--render-restored-mcp-completion session item))
+    (_ nil)))
+
+(defun codex-ide--restored-command-analysis (command)
+  "Return cached restored rendering analysis for COMMAND."
+  (let* ((display-command (codex-ide--display-command-string command))
+         (argv (or (codex-ide--split-shell-words display-command)
+                   (codex-ide--command-argv command)))
+         (sed-request (codex-ide--sed-print-request argv))
+         read-summary
+         search-request
+         search-summary)
+    (setq read-summary
+          (cond
+           ((and sed-request
+                 (= (length (nth 2 sed-request)) 1))
+            (codex-ide--read-lines-summary
+             (car (nth 2 sed-request))
+             (nth 0 sed-request)
+             (nth 1 sed-request)))
+           ((and (stringp display-command)
+                 (string-match-p "|" display-command))
+            (let ((parts (codex-ide--split-shell-pipeline display-command)))
+              (when (= (length parts) 2)
+                (let* ((left (codex-ide--split-shell-words (car parts)))
+                       (right (codex-ide--split-shell-words (cadr parts)))
+                       (file (codex-ide--nl-command-file left))
+                       (request (codex-ide--sed-print-request right)))
+                  (when (and file request (null (nth 2 request)))
+                    (codex-ide--read-lines-summary
+                     file
+                     (nth 0 request)
+                     (nth 1 request)))))))))
+    (setq search-request (codex-ide--rg-search-request argv))
+    (setq search-summary
+          (when search-request
+            (codex-ide--search-summary
+             (car search-request)
+             (cadr search-request))))
+    (list :display-command display-command
+          :argv argv
+          :read-summary read-summary
+          :search-request search-request
+          :search-summary search-summary
+          :summary (or read-summary search-summary "Ran command"))))
+
+(defun codex-ide--restored-command-start-details (session item analysis)
+  "Return restored command ITEM start detail entries for SESSION.
+ANALYSIS is from `codex-ide--restored-command-analysis'.
+Each entry is either (:shell COMMAND) or (:detail TEXT)."
+  (let ((details nil))
+    (unless (or (plist-get analysis :read-summary)
+                (plist-get analysis :search-summary))
+      (when-let* ((display-command (plist-get analysis :display-command))
+                  ((not (string-empty-p display-command))))
+        (push (list :shell display-command) details)))
+    (when-let* ((cwd (alist-get 'cwd item))
+                ((codex-ide--command-cwd-detail-visible-p session cwd)))
+      (push (list :detail (format "cwd: %s" (abbreviate-file-name cwd)))
+            details))
+    (nreverse details)))
+
+(defun codex-ide--insert-restored-command-start-block
+    (session summary details)
+  "Insert restored command SUMMARY and DETAILS for SESSION in one transaction."
+  (let ((buffer (codex-ide-session-buffer session)))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (let* ((restore-point (codex-ide--input-point-marker session))
+               (moving (and (= (point) (point-max)) (not restore-point)))
+               (active-boundary (codex-ide--active-input-boundary-marker buffer))
+               (insertion-position
+                (codex-ide--transcript-insertion-position buffer))
+               (advance-active-boundary
+                (and active-boundary
+                     (= insertion-position (marker-position active-boundary))))
+               (properties (codex-ide--current-agent-text-properties))
+               block-range)
+          (codex-ide--with-transcript-render-transaction-at
+           (session buffer insertion-position)
+           (codex-ide--maybe-save-transcript-position
+            insertion-position
+            (codex-ide-renderer-append-to-buffer
+             ""
+             :insertion-point insertion-position
+             :restore-point restore-point
+             :preserve-point t
+             :move-point-to-end moving
+             :after-insert
+             (lambda (_start _end inserted-at)
+               (goto-char inserted-at)
+               (codex-ide-renderer-insert-output-spacing)
+               (let ((start (point)))
+                 (codex-ide-renderer-insert-read-only
+                  (format "* %s\n" summary)
+                  'codex-ide-item-summary-face
+                  properties)
+                 (dolist (detail details)
+                   (pcase detail
+                     (`(:shell ,command)
+                      ;; Restored history skips shell fontification here:
+                      ;; large resumes often contain thousands of commands,
+                      ;; and syntax-highlighting each historical command is
+                      ;; pure display work.
+                      (codex-ide-renderer-insert-read-only
+                       (format "  $ %s\n" command)
+                       'codex-ide-item-detail-face
+                       properties))
+                     (`(:detail ,text)
+                      (codex-ide-renderer-insert-read-only
+                       (codex-ide--item-detail-line text)
+                       'codex-ide-item-detail-face
+                       properties))))
+                 (setq block-range (cons start (point))))
+               (codex-ide--finish-transcript-append
+                buffer
+                inserted-at
+                (cdr block-range)
+                active-boundary
+                advance-active-boundary
+                session)))))
+          block-range)))))
+
+(defun codex-ide--render-restored-command-start (session item)
+  "Render restored command ITEM start for SESSION using the restore fast path."
+  (let* ((buffer (codex-ide-session-buffer session))
+         (item-id (alist-get 'id item))
+         (item-type (alist-get 'type item))
+         (command (alist-get 'command item))
+         (analysis (codex-ide--restored-command-analysis command))
+         (summary (plist-get analysis :summary))
+         (details (codex-ide--restored-command-start-details
+                   session item analysis))
+         (existing-state (copy-sequence
+                          (or (codex-ide--item-state session item-id) '())))
+         anchor-marker)
+    (when summary
+      (let ((codex-ide--current-agent-item-type item-type))
+        (unless (codex-ide-session-output-prefix-inserted session)
+          (codex-ide--begin-turn-display session nil t))
+        (codex-ide--clear-pending-output-indicator session)
+        (when-let* ((range (codex-ide--insert-restored-command-start-block
+                            session summary details)))
+          (setq anchor-marker
+                (with-current-buffer buffer
+                  (copy-marker (cdr range))))
+          (let ((state existing-state))
+            (setq state (plist-put state :type item-type))
+            (setq state (plist-put state :item item))
+            (setq state (plist-put state :summary summary))
+            (setq state
+                  (plist-put
+                   state
+                   :search-request
+                   (plist-get analysis :search-request)))
+            (setq state (plist-put state :details-rendered t))
+            (setq state (plist-put state :item-result-anchor-marker
+                                   anchor-marker))
+            (setq state (plist-put state :item-result-label "output"))
+            (setq state (plist-put state :command-output-anchor-marker
+                                   anchor-marker))
+            (setq state (plist-put state :saw-output nil))
+            (codex-ide--put-item-state session item-id state))
+          t)))))
+
 (defun codex-ide--replay-stored-render-item (session item)
   "Replay stored non-message ITEM into SESSION using live item render primitives."
   (let* ((item (codex-ide--normalized-stored-render-item item))
          (item-type (alist-get 'type item))
          (item-id (alist-get 'id item)))
-    (when (codex-ide--summarize-item-start item)
+    (when (or (equal item-type "commandExecution")
+              (codex-ide--summarize-item-start item))
       (when (equal item-type "fileChange")
         (codex-ide--put-current-turn-file-change session item-id item))
-      (codex-ide--render-item-start session item)
-      (codex-ide--render-item-completion session item)
+      (if (equal item-type "commandExecution")
+          (codex-ide--render-restored-command-start session item)
+        (codex-ide--render-item-start session item))
+      (or (codex-ide--render-restored-item-completion session item)
+          (codex-ide--render-item-completion session item))
       t)))
 
 (defun codex-ide--replay-thread-read-turn (session turn)
@@ -4932,32 +5374,36 @@ Signal an error when THREAD-READ lacks replayable transcript items."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
   (unless session
     (error "No Codex session available"))
-  (setq thread-read (codex-ide--thread-read-with-rollout-render-items thread-read))
-  (codex-ide--session-metadata-put session :turn-start-index nil)
-  (codex-ide--set-pending-turn-start-marker session nil)
   (let* ((limit (max 0 codex-ide-resume-summary-turn-limit))
+         (thread-read
+          (codex-ide--thread-read-with-rollout-render-items
+           thread-read
+           limit))
          (turns (append (codex-ide--thread-read-turns thread-read) nil))
          (recent-turns (cond
                         ((<= limit 0) nil)
                         ((> (length turns) limit) (last turns limit))
                         (t turns)))
          (restored nil))
+    (codex-ide--session-metadata-put session :turn-start-index nil)
+    (codex-ide--set-pending-turn-start-marker session nil)
     (unless recent-turns
       (error "Stored thread has no replayable turns"))
-    (dolist (turn recent-turns restored)
-      (setq restored
-            (or (codex-ide--replay-thread-read-turn session turn)
-                restored)))
-    (unless restored
-      (error
-       (concat
-        "Stored thread transcript could not be replayed. "
-        "Expected replayable userMessage/agentMessage turn items.")))
-    (when restored
-      (codex-ide--set-restored-thread-read session thread-read)
-      (codex-ide--append-to-buffer (codex-ide-session-buffer session) "\n")
-      (codex-ide--append-restored-transcript-separator
-       (codex-ide-session-buffer session)))
+    (let ((inhibit-redisplay t))
+      (dolist (turn recent-turns restored)
+        (setq restored
+              (or (codex-ide--replay-thread-read-turn session turn)
+                  restored)))
+      (unless restored
+        (error
+         (concat
+          "Stored thread transcript could not be replayed. "
+          "Expected replayable userMessage/agentMessage turn items.")))
+      (when restored
+        (codex-ide--set-restored-thread-read session thread-read)
+        (codex-ide--append-to-buffer (codex-ide-session-buffer session) "\n")
+        (codex-ide--append-restored-transcript-separator
+         (codex-ide-session-buffer session))))
     (setf (codex-ide-session-current-turn-id session) nil
           (codex-ide-session-current-message-item-id session) nil
           (codex-ide-session-current-message-prefix-inserted session) nil
@@ -5971,6 +6417,11 @@ compatibility with older app-server payloads and global notifications."
 	   (codex-ide--update-header-line session)
 	   (codex-ide--schedule-live-usage-refresh session)
            (codex-ide-usage-note-updated session 'quota)))
+        ("skills/changed"
+         (codex-ide-log-message
+          session
+          "Skills changed; refreshing skill completion cache")
+         (codex-ide-mention-refresh-skill-cache-after-change session))
 	("turn/started"
 	 (codex-ide--remember-reasoning-effort session params)
 	 (codex-ide--remember-or-request-model-name session params)
@@ -6723,10 +7174,9 @@ LOCAL-IMAGES and IMAGE-DETAIL are forwarded to the queued turn payload."
   "Append slash command detail TEXT to SESSION's transcript."
   (when (and (stringp text)
              (not (string-empty-p text)))
-    (codex-ide--append-agent-text
+    (codex-ide--append-item-detail-text
      (codex-ide-session-buffer session)
-     (codex-ide--item-detail-line text)
-     'codex-ide-item-detail-face)))
+     (codex-ide--item-detail-line text))))
 
 (defun codex-ide--append-slash-command-start (session entry)
   "Append a slash command start block for ENTRY to SESSION's transcript."
@@ -6761,7 +7211,8 @@ LOCAL-IMAGES and IMAGE-DETAIL are forwarded to the queued turn payload."
                        (codex-ide--item-detail-line
                         (symbol-name
                          (codex-ide-slash-command-entry-command entry)))
-                       'codex-ide-item-detail-face)))
+                       'codex-ide-item-detail-face
+                       (codex-ide--item-detail-text-properties))))
                  (codex-ide--finish-transcript-append
                   buffer
                   inserted-at
