@@ -91,7 +91,9 @@
 				     (should-not codex-ide-enable-emacs-tool-bridge))))))
 
 (ert-deftest codex-ide-mcp-bridge-mcp-config-args-reflect-enabled-settings ()
-  (let ((project-dir (codex-ide-test--make-temp-project)))
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (extra-root (expand-file-name "extra" project-dir)))
+    (make-directory extra-root t)
     (codex-ide-test-with-fixture project-dir
 				 (let ((codex-ide-enable-emacs-tool-bridge t)
 				       (codex-ide-emacs-tool-bridge-name "editor")
@@ -99,6 +101,7 @@
 				       (codex-ide-emacs-bridge-emacsclient-command "emacsclient")
 				       (codex-ide-emacs-bridge-script-path "/tmp/codex-ide-mcp-server.py")
 				       (codex-ide-emacs-bridge-server-name "testsrv")
+				       (codex-ide-mcp-bridge-allowed-roots (list extra-root))
 				       (codex-ide-emacs-bridge-startup-timeout 15)
 				       (codex-ide-emacs-bridge-tool-timeout 45))
 				   (cl-letf (((symbol-function 'executable-find)
@@ -108,9 +111,11 @@
 						  ("emacsclient" "/usr/bin/emacsclient")
 						  (_ nil)))))
 				     (should
-				      (equal (codex-ide-mcp-bridge-mcp-config-args)
-					     '("-c" "mcp_servers.editor.command=\"/usr/bin/python3\""
-					       "-c" "mcp_servers.editor.args=[\"/tmp/codex-ide-mcp-server.py\",\"--emacsclient\",\"/usr/bin/emacsclient\",\"--server-name\",\"testsrv\"]"
+				      (equal (codex-ide-mcp-bridge-mcp-config-args project-dir)
+					     `("-c" "mcp_servers.editor.command=\"/usr/bin/python3\""
+					       "-c" ,(format "mcp_servers.editor.args=[\"/tmp/codex-ide-mcp-server.py\",\"--emacsclient\",\"/usr/bin/emacsclient\",\"--server-name\",\"testsrv\",\"--allowed-root\",\"%s\",\"--allowed-root\",\"%s\"]"
+							      project-dir
+							      extra-root)
 					       "-c" "mcp_servers.editor.startup_timeout_sec=15"
 					       "-c" "mcp_servers.editor.tool_timeout_sec=45"))))))))
 
@@ -132,9 +137,10 @@
 						  ("emacsclient" "/usr/bin/emacsclient")
 						  (_ nil)))))
 				     (should
-				      (equal (codex-ide-mcp-bridge-mcp-config-args)
-					     '("-c" "mcp_servers.editor.command=\"/usr/bin/python3\""
-					       "-c" "mcp_servers.editor.args=[\"/tmp/codex-ide-mcp-server.py\",\"--emacsclient\",\"/usr/bin/emacsclient\"]"
+				      (equal (codex-ide-mcp-bridge-mcp-config-args project-dir)
+					     `("-c" "mcp_servers.editor.command=\"/usr/bin/python3\""
+					       "-c" ,(format "mcp_servers.editor.args=[\"/tmp/codex-ide-mcp-server.py\",\"--emacsclient\",\"/usr/bin/emacsclient\",\"--allowed-root\",\"%s\"]"
+							      project-dir)
 					       "-c" "mcp_servers.editor.startup_timeout_sec=15"
 					       "-c" "mcp_servers.editor.tool_timeout_sec=45"))))))))
 
@@ -161,6 +167,21 @@
 				    (codex-ide-mcp-bridge-request-exempt-from-approval-p
 				     '((serverName . "editor")
 				       (message . "Allow the editor MCP server to run tool \"emacs_get_buffer_diagnostics\"?"))))))))
+
+(ert-deftest codex-ide-mcp-bridge-request-exempt-from-approval-denies-content-tools ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+				 (let ((codex-ide-emacs-tool-bridge-name "editor")
+				       (codex-ide-emacs-bridge-require-approval nil)
+				       (codex-ide-emacs-bridge-auto-approved-tools
+					(append codex-ide-emacs-bridge-auto-approved-tools
+						codex-ide-mcp-bridge--approval-sensitive-tool-names)))
+				   (dolist (tool codex-ide-mcp-bridge--approval-sensitive-tool-names)
+				     (should-not
+				      (codex-ide-mcp-bridge-request-exempt-from-approval-p
+				       `((serverName . "editor")
+					 (message . ,(format "Allow the editor MCP server to run tool \"%s\"?"
+							     tool))))))))))
 
 (ert-deftest codex-ide-mcp-bridge-request-exempt-from-approval-ignores-shell-requests-from-emacs-paths ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
@@ -287,7 +308,8 @@
          (file-path (codex-ide-test--make-project-file project-dir "ensure.el" "(message \"ensure\")\n")))
     (codex-ide-test-with-fixture project-dir
 				 (save-window-excursion
-				   (let* ((starting-buffer (window-buffer (selected-window)))
+				   (let* ((codex-ide-mcp-bridge-allowed-roots (list project-dir))
+					  (starting-buffer (window-buffer (selected-window)))
 					  (buffer (find-buffer-visiting file-path)))
 				     (when buffer
 				       (kill-buffer buffer))
@@ -298,6 +320,61 @@
 				       (should (find-buffer-visiting file-path))
 				       (should (eq (window-buffer (selected-window)) starting-buffer))))))))
 
+(ert-deftest codex-ide-mcp-bridge-file-tools-reject-outside-root-paths ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (outside-dir (codex-ide-test--make-temp-project))
+         (outside-file (codex-ide-test--make-project-file outside-dir "outside.el" "(message \"outside\")\n")))
+    (codex-ide-test-with-fixture project-dir
+				 (let ((codex-ide-mcp-bridge-allowed-roots (list project-dir)))
+				   (should-error
+				    (codex-ide-mcp-bridge--tool-call--ensure_file_buffer_open
+				     `((path . ,outside-file)))
+				    :type 'error)
+				   (should-error
+				    (codex-ide-mcp-bridge--tool-call--show_file_buffer
+				     `((path . ,outside-file)))
+				    :type 'error)
+				   (should-error
+				    (codex-ide-mcp-bridge--tool-call--lisp_check_parens
+				     `((path . ,outside-file)))
+				    :type 'error)))))
+
+(ert-deftest codex-ide-mcp-bridge-file-tools-reject-symlink-escapes ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (outside-dir (codex-ide-test--make-temp-project))
+         (outside-file (codex-ide-test--make-project-file outside-dir "outside.el" "(message \"outside\")\n"))
+         (link-path (expand-file-name "escape.el" project-dir)))
+    (make-symbolic-link outside-file link-path)
+    (codex-ide-test-with-fixture project-dir
+				 (let ((codex-ide-mcp-bridge-allowed-roots (list project-dir)))
+				   (should-error
+				    (codex-ide-mcp-bridge--tool-call--ensure_file_buffer_open
+				     `((path . ,link-path)))
+				    :type 'error)))))
+
+(ert-deftest codex-ide-mcp-bridge-file-tools-reject-tramp-paths ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+				 (let ((codex-ide-mcp-bridge-allowed-roots (list project-dir)))
+				   (should-error
+				    (codex-ide-mcp-bridge--tool-call--ensure_file_buffer_open
+				     '((path . "/ssh:example.invalid:/tmp/outside.el")))
+				    :type 'error)))))
+
+(ert-deftest codex-ide-mcp-bridge-file-tools-reject-directories-and-missing-files ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (missing-file (expand-file-name "missing.el" project-dir)))
+    (codex-ide-test-with-fixture project-dir
+				 (let ((codex-ide-mcp-bridge-allowed-roots (list project-dir)))
+				   (should-error
+				    (codex-ide-mcp-bridge--tool-call--ensure_file_buffer_open
+				     `((path . ,project-dir)))
+				    :type 'error)
+				   (should-error
+				    (codex-ide-mcp-bridge--tool-call--ensure_file_buffer_open
+				     `((path . ,missing-file)))
+				    :type 'error)))))
+
 (ert-deftest codex-ide-mcp-bridge-show-file-buffer-uses-non-selected-window ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
          (file-a (codex-ide-test--make-project-file project-dir "one.el" "(message \"one\")\n"))
@@ -306,7 +383,8 @@
 				 (save-window-excursion
 				   (delete-other-windows)
 				   (set-window-buffer (selected-window) (find-file-noselect file-a))
-				   (let* ((origin (selected-window))
+				   (let* ((codex-ide-mcp-bridge-allowed-roots (list project-dir))
+					  (origin (selected-window))
 					  (split-width-threshold 0)
 					  (split-height-threshold 0)
 					  (result (codex-ide-mcp-bridge--tool-call--show_file_buffer
@@ -328,7 +406,8 @@
   (let* ((project-dir (codex-ide-test--make-temp-project))
          (file-path (codex-ide-test--make-project-file project-dir "kill.el" "(message \"kill\")\n")))
     (codex-ide-test-with-fixture project-dir
-				 (let* ((buffer (find-file-noselect file-path))
+				 (let* ((codex-ide-mcp-bridge-allowed-roots (list project-dir))
+					(buffer (find-file-noselect file-path))
 					(killed-buffer nil)
 					(result nil))
 				   (cl-letf (((symbol-function 'kill-buffer)
@@ -348,7 +427,8 @@
                      "balanced.el"
                      "(defun balanced ()\n  (list 1 2 3))\n")))
     (codex-ide-test-with-fixture project-dir
-				 (let ((result (codex-ide-mcp-bridge--tool-call--lisp_check_parens
+				 (let* ((codex-ide-mcp-bridge-allowed-roots (list project-dir))
+					(result (codex-ide-mcp-bridge--tool-call--lisp_check_parens
 						`((path . ,file-path)))))
 				   (should (equal (alist-get 'path result) file-path))
 				   (should (alist-get 'balanced result))
@@ -361,7 +441,8 @@
          (contents "(defun broken ()\n  (list 1 2 3]\n")
          (file-path (codex-ide-test--make-project-file project-dir "broken.el" contents)))
     (codex-ide-test-with-fixture project-dir
-				 (let ((result (codex-ide-mcp-bridge--tool-call--lisp_check_parens
+				 (let* ((codex-ide-mcp-bridge-allowed-roots (list project-dir))
+					(result (codex-ide-mcp-bridge--tool-call--lisp_check_parens
 						`((path . ,file-path)))))
 				   (should-not (eq (alist-get 'balanced result) t))
 				   (should (alist-get 'mismatch result))
@@ -377,7 +458,8 @@
                      "live.el"
                      "(defun live ()\n  (list 1 2 3))\n")))
     (codex-ide-test-with-fixture project-dir
-				 (let ((buffer (find-file-noselect file-path)))
+				 (let ((codex-ide-mcp-bridge-allowed-roots (list project-dir))
+				       (buffer (find-file-noselect file-path)))
 				   (with-current-buffer buffer
 				     (goto-char (point-max))
 				     (delete-char -2)
@@ -476,6 +558,44 @@
 				       (should (member (alist-get 'project-root result)
 						       (list :json-null
 							     (file-name-as-directory project-dir))))))))))
+
+(ert-deftest codex-ide-mcp-bridge-get-buffer-text-caps-large-result ()
+  (let ((buffer (generate-new-buffer " *codex-ide-buffer-text-limit*"))
+        (codex-ide-mcp-bridge-buffer-text-limit 5))
+    (unwind-protect
+        (with-current-buffer buffer
+          (insert "abcdefghi")
+          (let ((result (codex-ide-mcp-bridge--tool-call--get_buffer_text
+                         `((buffer . ,(buffer-name buffer))))))
+            (should (equal (alist-get 'buffer result) (buffer-name buffer)))
+            (should (alist-get 'text-truncated result))
+            (should (equal (alist-get 'text result) "abcde"))))
+      (kill-buffer buffer))))
+
+(ert-deftest codex-ide-mcp-bridge-buffer-content-tools-reject-outside-root-files ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (outside-dir (codex-ide-test--make-temp-project))
+         (outside-file (codex-ide-test--make-project-file outside-dir "outside.el" "needle\n")))
+    (codex-ide-test-with-fixture project-dir
+				 (let ((codex-ide-mcp-bridge-allowed-roots (list project-dir))
+				       (buffer (find-file-noselect outside-file)))
+				   (should-error
+				    (codex-ide-mcp-bridge--tool-call--get_buffer_text
+				     `((buffer . ,(buffer-name buffer))))
+				    :type 'error)
+				   (should-error
+				    (codex-ide-mcp-bridge--tool-call--get_buffer_slice
+				     `((buffer . ,(buffer-name buffer))))
+				    :type 'error)
+				   (should-error
+				    (codex-ide-mcp-bridge--tool-call--get_region_text
+				     `((buffer . ,(buffer-name buffer))))
+				    :type 'error)
+				   (should-error
+				    (codex-ide-mcp-bridge--tool-call--search_buffers
+				     `((pattern . "needle")
+				       (buffers . (,(buffer-name buffer)))))
+				    :type 'error)))))
 
 (ert-deftest codex-ide-mcp-bridge-get-buffer-slice-returns-line-range ()
   (let ((buffer (generate-new-buffer " *codex-ide-slice*")))
@@ -611,7 +731,8 @@
     (should (stringp (alist-get 'function-documentation result)))))
 
 (ert-deftest codex-ide-mcp-bridge-get-messages-returns-recent-lines ()
-  (let ((buffer (get-buffer-create "*Messages*")))
+  (let ((buffer (get-buffer-create "*Messages*"))
+        (codex-ide-mcp-bridge-allow-sensitive-state t))
     (with-current-buffer buffer
       (let ((inhibit-read-only t))
         (erase-buffer)
@@ -620,6 +741,23 @@
                    '((max-lines . 2)))))
       (should (alist-get 'available result))
       (should (equal (alist-get 'text result) "two\nthree\n")))))
+
+(ert-deftest codex-ide-mcp-bridge-sensitive-state-tools-disabled-by-default ()
+  (let ((buffer (get-buffer-create " *codex-ide-active-minibuffer-test*")))
+    (unwind-protect
+        (progn
+          (should-error
+           (codex-ide-mcp-bridge--tool-call--get_messages
+            '((max-lines . 2)))
+           :type 'error)
+          (set-window-buffer (selected-window) buffer)
+          (cl-letf (((symbol-function 'active-minibuffer-window)
+                     (lambda ()
+                       (selected-window))))
+            (should-error
+             (codex-ide-mcp-bridge--tool-call--get_minibuffer_state nil)
+             :type 'error)))
+      (kill-buffer buffer))))
 
 (ert-deftest codex-ide-mcp-bridge-get-minibuffer-state-reports-inactive ()
   (let ((result (codex-ide-mcp-bridge--tool-call--get_minibuffer_state nil)))

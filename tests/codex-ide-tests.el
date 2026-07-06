@@ -68,7 +68,7 @@
         (codex-ide-cli-extra-flags "--model test-model --debug")
         (bridge-args '("-c" "mcp_servers.emacs.command=\"python3\"")))
     (cl-letf (((symbol-function 'codex-ide-mcp-bridge-mcp-config-args)
-               (lambda () bridge-args)))
+               (lambda (&optional _working-dir) bridge-args)))
       (should
        (equal (codex-ide--app-server-command)
               '("/tmp/codex"

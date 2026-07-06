@@ -108,10 +108,12 @@
     (codex-ide--detect-cli))
   codex-ide--cli-available)
 
-(defun codex-ide--app-server-command ()
-  "Build the `codex app-server` command list."
+(defun codex-ide--app-server-command (&optional working-dir)
+  "Build the `codex app-server` command list.
+
+When WORKING-DIR is non-nil, pass it through to MCP bridge configuration."
   (append (list codex-ide-cli-path "app-server" "--listen" "stdio://")
-          (codex-ide-mcp-bridge-mcp-config-args)
+          (codex-ide-mcp-bridge-mcp-config-args working-dir)
           (when (not (string-empty-p codex-ide-cli-extra-flags))
             (split-string-shell-command codex-ide-cli-extra-flags))))
 
@@ -278,6 +280,7 @@ protocol requests such as thread listing."
                         name-suffix)
               (file-name-nondirectory (directory-file-name working-dir))))
            (process-connection-type nil)
+           (app-server-command (codex-ide--app-server-command working-dir))
            (session (make-codex-ide-session
                      :directory working-dir
                      :name-suffix name-suffix
@@ -307,7 +310,7 @@ protocol requests such as thread listing."
                   (make-process
                    :name (format "codex-ide[%s]" process-label)
                    :buffer nil
-                   :command (codex-ide--app-server-command)
+                   :command app-server-command
                    :coding 'utf-8-unix
                    :filter #'codex-ide--process-filter
                    :sentinel #'codex-ide--process-sentinel
@@ -330,7 +333,7 @@ protocol requests such as thread listing."
             (codex-ide-log-message
              session
              "Starting process: %s"
-             (string-join (codex-ide--app-server-command) " "))
+             (string-join app-server-command " "))
             (codex-ide--run-session-event
              'created
              session
@@ -346,10 +349,10 @@ protocol requests such as thread listing."
                   (codex-ide--format-session-error-message
                    (codex-ide--classify-session-error
                     (error-message-string err)
-                    (codex-ide--app-server-command))
+                    app-server-command)
                    (codex-ide--extract-error-text
                     (error-message-string err)
-                    (codex-ide--app-server-command))
+                    app-server-command)
                    "Codex startup failed"))))))))
 
 (defun codex-ide--create-process-session (&optional reuse-buffer reuse-name-suffix)
