@@ -11,8 +11,10 @@
 (require 'subr-x)
 (require 'codex-ide-test-fixtures)
 
-(defun codex-ide-mcp-test--run-script (input)
-  "Run the MCP bridge script with INPUT and return (EXIT-CODE . OUTPUT)."
+(defun codex-ide-mcp-test--run-script (input &rest args)
+  "Run the MCP bridge script with INPUT and ARGS.
+
+Return (EXIT-CODE . OUTPUT)."
   (let ((script-path (expand-file-name "bin/codex-ide-mcp-server.py"
                                        codex-ide-test--root-directory))
         (input-buffer (generate-new-buffer " *codex-ide-mcp-run-input*"))
@@ -23,14 +25,15 @@
             (insert input))
           (cons
            (with-current-buffer input-buffer
-             (call-process-region
-              (point-min)
-              (point-max)
-              "python3"
-              nil
-              output-buffer
-              nil
-              script-path))
+             (apply #'call-process-region
+                    (point-min)
+                    (point-max)
+                    "python3"
+                    nil
+                    output-buffer
+                    nil
+                    script-path
+                    args))
            (with-current-buffer output-buffer
              (buffer-string))))
       (kill-buffer input-buffer)
@@ -43,6 +46,56 @@
         (json-key-type 'string))
     (json-read-from-string
      (car (split-string output "\n" t)))))
+
+(ert-deftest codex-ide-mcp-script-does-not-write-debug-log-by-default ()
+  (let* ((legacy-log "/tmp/codex-ide-mcp-debug.log")
+         (before-attrs (and (file-exists-p legacy-log)
+                            (file-attributes legacy-log)))
+         (script-source (with-temp-buffer
+                          (insert-file-contents
+                           (expand-file-name "bin/codex-ide-mcp-server.py"
+                                             codex-ide-test--root-directory))
+                          (buffer-string)))
+         (result (codex-ide-mcp-test--run-script
+                  "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\",\"params\":{\"path\":\"/tmp/secret.el\"}}\n"))
+         (after-attrs (and (file-exists-p legacy-log)
+                           (file-attributes legacy-log))))
+    (should (= (car result) 0))
+    (should-not (string-match-p "/tmp/codex-ide-mcp-debug.log" script-source))
+    (if before-attrs
+        (progn
+          (should after-attrs)
+          (should (equal (file-attribute-size after-attrs)
+                         (file-attribute-size before-attrs)))
+          (should (equal (file-attribute-modification-time after-attrs)
+                         (file-attribute-modification-time before-attrs))))
+      (should-not after-attrs))))
+
+(ert-deftest codex-ide-mcp-script-debug-log-is-redacted ()
+  (let* ((debug-log (make-temp-file "codex-ide-mcp-debug-"))
+         (secret-path "/tmp/codex-ide-secret-file.el")
+         (body (format "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\",\"params\":{\"path\":\"%s\"}}"
+                       secret-path))
+         (result (progn
+                   (delete-file debug-log)
+                   (codex-ide-mcp-test--run-script
+                    (format "Content-Length: %d\r\n\r\n%s"
+                            (string-bytes body)
+                            body)
+                    "--debug-log"
+                    debug-log))))
+    (unwind-protect
+        (let ((log-text (with-temp-buffer
+                          (insert-file-contents debug-log)
+                          (buffer-string))))
+          (should (= (car result) 0))
+          (should (= (logand (file-modes debug-log) #o777) #o600))
+          (should (string-match-p "stdin header: [0-9]+ bytes" log-text))
+          (should (string-match-p "stdin body: [0-9]+ bytes" log-text))
+          (should-not (string-match-p (regexp-quote secret-path) log-text))
+          (should-not (string-match-p (regexp-quote body) log-text)))
+      (when (file-exists-p debug-log)
+        (delete-file debug-log)))))
 
 (ert-deftest codex-ide-mcp-script-skips-blank-lines-before-message ()
   (let* ((result (codex-ide-mcp-test--run-script
@@ -102,7 +155,7 @@
     (should (equal (alist-get "id" response nil nil #'equal) 7))
     (should-not (alist-get "result" response nil nil #'equal))))
 
-(ert-deftest codex-ide-mcp-script-starts-with-optional-server-name-flag ()
+(ert-deftest codex-ide-mcp-script-starts-with-server-name-and-allowed-root ()
   (let ((script-path (expand-file-name "bin/codex-ide-mcp-server.py"
                                        codex-ide-test--root-directory))
         (mock-emacsclient (make-temp-file "codex-ide-emacsclient-" nil ".py"))
@@ -145,7 +198,9 @@
                "--emacsclient"
                mock-emacsclient
                "--server-name"
-               "testsrv"))
+               "testsrv"
+               "--allowed-root"
+               "/tmp/project-root"))
             0))
           (with-temp-buffer
             (insert-file-contents argv-log)
@@ -157,6 +212,10 @@
           (should (string-match-p "base64-encode-string"
                                   (aref argv 3)))
           (should (string-match-p "codex-ide-mcp-bridge--json-tool-call"
+                                  (aref argv 3)))
+          (should (string-match-p "allowedRoots"
+                                  (aref argv 3)))
+          (should (string-match-p "/tmp/project-root"
                                   (aref argv 3)))
           (with-current-buffer output-buffer
             (should (string-match-p "\"jsonrpc\":\"2.0\"" (buffer-string)))))
@@ -262,6 +321,7 @@
                                       (alist-get "result" (nth 1 responses) nil nil #'equal)
                                       nil nil #'equal)))
                 (should (= (length tools) 17))
+                (should-not (string-match-p "allowedRoot" (json-encode tools)))
                 (should
                  (equal (mapcar (lambda (tool)
                                   (alist-get "name" tool nil nil #'equal))

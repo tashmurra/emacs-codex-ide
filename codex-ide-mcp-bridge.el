@@ -64,9 +64,38 @@ behavior."
   :type 'integer
   :group 'codex-ide)
 
+;;;###autoload
 (defcustom codex-ide-mcp-bridge-buffer-slice-text-limit 50000
   "Maximum number of characters returned by one buffer slice request."
   :type 'integer
+  :group 'codex-ide)
+
+;;;###autoload
+(defcustom codex-ide-mcp-bridge-enforce-file-roots t
+  "Whether bridge file tools should be constrained to allowed roots."
+  :type 'boolean
+  :group 'codex-ide)
+
+;;;###autoload
+(defcustom codex-ide-mcp-bridge-allowed-roots nil
+  "Additional local roots bridge file tools may access.
+
+Session startup automatically passes the session working directory as an
+allowed root.  This option is for explicit extra roots."
+  :type '(repeat directory)
+  :group 'codex-ide)
+
+;;;###autoload
+(defcustom codex-ide-mcp-bridge-buffer-text-limit
+  codex-ide-mcp-bridge-buffer-slice-text-limit
+  "Maximum number of characters returned by a full buffer text request."
+  :type 'integer
+  :group 'codex-ide)
+
+;;;###autoload
+(defcustom codex-ide-mcp-bridge-allow-sensitive-state nil
+  "Whether bridge tools may expose Messages and active minibuffer contents."
+  :type 'boolean
   :group 'codex-ide)
 
 ;;;###autoload
@@ -110,13 +139,42 @@ bridge starts the Emacs server automatically when needed."
   :group 'codex-ide)
 
 ;;;###autoload
-(defcustom codex-ide-emacs-bridge-require-approval nil
+(defcustom codex-ide-emacs-bridge-require-approval t
   "Whether Emacs MCP bridge tool calls should require user approval.
 
 When nil, `codex-ide' auto-accepts approval-like MCP elicitations that clearly
 refer to the configured Emacs MCP bridge server or one of its tools."
   :type 'boolean
   :group 'codex-ide)
+
+;;;###autoload
+(defcustom codex-ide-emacs-bridge-auto-approved-tools
+  '("emacs_get_all_buffers"
+    "emacs_get_buffer_info"
+    "emacs_get_buffer_diagnostics"
+    "emacs_get_symbol_at_point"
+    "emacs_describe_symbol"
+    "emacs_get_all_windows")
+  "Bridge tools eligible for approval auto-exemption when approvals are disabled."
+  :type '(repeat string)
+  :group 'codex-ide)
+
+(defvar codex-ide-mcp-bridge--request-allowed-roots nil
+  "Allowed roots supplied by the current MCP tool-call metadata.")
+
+(defconst codex-ide-mcp-bridge--approval-sensitive-tool-names
+  '("emacs_get_buffer_text"
+    "emacs_get_current_context"
+    "emacs_get_buffer_slice"
+    "emacs_get_region_text"
+    "emacs_search_buffers"
+    "emacs_get_messages"
+    "emacs_get_minibuffer_state"
+    "emacs_ensure_file_buffer_open"
+    "emacs_show_file_buffer"
+    "emacs_kill_file_buffer"
+    "emacs_lisp_check_parens")
+  "Bridge tools that must never be auto-exempted from approval.")
 
 (defconst codex-ide-mcp-bridge--tool-names
   '("emacs_get_all_buffers"
@@ -169,15 +227,55 @@ refer to the configured Emacs MCP bridge server or one of its tools."
   "Return the emacsclient server name the bridge should target."
   (or codex-ide-emacs-bridge-server-name server-name))
 
+(defun codex-ide-mcp-bridge--approval-tool-name-from-message (message)
+  "Return an Emacs bridge tool name parsed from approval MESSAGE."
+  (when (stringp message)
+    (cond
+     ((string-match "tool[[:space:]\n]+\"\\([^\"]+\\)\"" message)
+      (match-string 1 message))
+     ((string-match "\\brun[[:space:]\n]+\\(emacs_[[:alnum:]_]+\\)\\b"
+                    message)
+      (match-string 1 message)))))
+
+(defun codex-ide-mcp-bridge--approval-tool-name-from-value (value)
+  "Return the first bridge tool name found in VALUE."
+  (cond
+   ((and (consp value)
+         (eq (car value) 'tool)
+         (stringp (cdr value)))
+    (cdr value))
+   ((and (consp value)
+         (stringp (alist-get 'tool value)))
+    (alist-get 'tool value))
+   ((consp value)
+    (or (codex-ide-mcp-bridge--approval-tool-name-from-value (car value))
+        (codex-ide-mcp-bridge--approval-tool-name-from-value (cdr value))))
+   ((vectorp value)
+    (seq-some #'codex-ide-mcp-bridge--approval-tool-name-from-value
+              (append value nil)))))
+
+(defun codex-ide-mcp-bridge--approval-tool-name (params)
+  "Return the bridge tool name described by approval PARAMS, if present."
+  (or (codex-ide-mcp-bridge--approval-tool-name-from-value
+       (alist-get 'permissions params))
+      (codex-ide-mcp-bridge--approval-tool-name-from-message
+       (alist-get 'message params))
+      (codex-ide-mcp-bridge--approval-tool-name-from-message
+       (alist-get 'reason params))))
+
 ;;;###autoload
 (defun codex-ide-mcp-bridge-request-exempt-from-approval-p (params)
   "Return non-nil when PARAMS describe an Emacs MCP bridge request.
 
 This is used to bypass bridge-originated elicitation prompts when
 `codex-ide-emacs-bridge-require-approval' is nil."
-  (and (not codex-ide-emacs-bridge-require-approval)
-       (equal (alist-get 'serverName params)
-              codex-ide-emacs-tool-bridge-name)))
+  (let ((tool-name (codex-ide-mcp-bridge--approval-tool-name params)))
+    (and (not codex-ide-emacs-bridge-require-approval)
+         (equal (alist-get 'serverName params)
+                codex-ide-emacs-tool-bridge-name)
+         (member tool-name codex-ide-emacs-bridge-auto-approved-tools)
+         (not (member tool-name
+                      codex-ide-mcp-bridge--approval-sensitive-tool-names)))))
 
 ;;;###autoload
 (defun codex-ide-mcp-bridge-enabled-p ()
@@ -258,9 +356,33 @@ Errors from `server-running-p' are treated as nil."
       (unless (codex-ide-mcp-bridge--ensure-server-running-p server-name)
         (server-start nil codex-ide-suppress-server-start-prompts)))))
 
+(defun codex-ide-mcp-bridge--local-root-argument (root)
+  "Return ROOT as a local absolute CLI argument, or nil."
+  (when (and (stringp root)
+             (not (string-empty-p root))
+             (not (file-remote-p root)))
+    (directory-file-name (expand-file-name root))))
+
+(defun codex-ide-mcp-bridge--mcp-config-allowed-roots (working-dir)
+  "Return local roots that should be passed for WORKING-DIR."
+  (seq-filter
+   #'identity
+   (mapcar #'codex-ide-mcp-bridge--local-root-argument
+           (append (when working-dir (list working-dir))
+                   codex-ide-mcp-bridge-allowed-roots))))
+
+(defun codex-ide-mcp-bridge--allowed-root-args (roots)
+  "Return bridge script arguments for allowed ROOTS."
+  (apply #'append
+         (mapcar (lambda (root)
+                   (list "--allowed-root" root))
+                 roots)))
+
 ;;;###autoload
-(defun codex-ide-mcp-bridge-mcp-config-args ()
-  "Return `codex app-server' CLI args that register the Emacs MCP bridge."
+(defun codex-ide-mcp-bridge-mcp-config-args (&optional working-dir)
+  "Return `codex app-server' CLI args that register the Emacs MCP bridge.
+
+When WORKING-DIR is non-nil, pass it to the bridge server as an allowed root."
   (when (codex-ide-mcp-bridge-enabled-p)
     (let* ((bridge-name codex-ide-emacs-tool-bridge-name)
            (prefix (format "mcp_servers.%s" bridge-name))
@@ -272,13 +394,16 @@ Errors from `server-running-p' are treated as nil."
             (or (executable-find codex-ide-emacs-bridge-emacsclient-command)
                 codex-ide-emacs-bridge-emacsclient-command))
            (server-name codex-ide-emacs-bridge-server-name)
+           (allowed-roots
+            (codex-ide-mcp-bridge--mcp-config-allowed-roots working-dir))
            (script-args
             (append (list script-path
                           "--emacsclient"
                           emacsclient-command)
                     (when (and server-name
                                (not (string-empty-p server-name)))
-                      (list "--server-name" server-name)))))
+                      (list "--server-name" server-name))
+                    (codex-ide-mcp-bridge--allowed-root-args allowed-roots))))
       (list "-c" (format "%s.command=%s"
                          prefix
                          (codex-ide-mcp-bridge--toml-string
@@ -327,6 +452,70 @@ Errors from `server-running-p' are treated as nil."
     (unless buffer
       (error "Unknown buffer: %s" (or buffer-name "nil")))
     buffer))
+
+(defun codex-ide-mcp-bridge--effective-allowed-root-truenames ()
+  "Return local, existing allowed roots as truename directories."
+  (seq-filter
+   #'identity
+   (mapcar
+    (lambda (root)
+      (when-let* ((local-root
+                   (codex-ide-mcp-bridge--local-root-argument root)))
+        (when (file-directory-p local-root)
+          (file-name-as-directory (file-truename local-root)))))
+    (append codex-ide-mcp-bridge--request-allowed-roots
+            codex-ide-mcp-bridge-allowed-roots))))
+
+(defun codex-ide-mcp-bridge--path-inside-root-p (true-path true-root)
+  "Return non-nil when TRUE-PATH is inside TRUE-ROOT."
+  (or (string= true-path (directory-file-name true-root))
+      (string-prefix-p true-root true-path)))
+
+(defun codex-ide-mcp-bridge--file-truename (path)
+  "Return truename for PATH, surfacing failures as bridge errors."
+  (condition-case err
+      (file-truename path)
+    (error
+     (error "Unable to resolve file path %S: %s"
+            path
+            (error-message-string err)))))
+
+(defun codex-ide-mcp-bridge--safe-local-file-path (path &optional allow-missing)
+  "Return absolute local PATH after validating bridge file access.
+
+When ALLOW-MISSING is non-nil, a nonexistent path may pass root validation for
+tools that only check whether a buffer is already visiting that path."
+  (unless (and (stringp path) (not (string-empty-p path)))
+    (error "Missing file path"))
+  (when (file-remote-p path)
+    (error "Remote file paths are not allowed: %s" path))
+  (let ((expanded-path (expand-file-name path)))
+    (when (file-remote-p expanded-path)
+      (error "Remote file paths are not allowed: %s" path))
+    (when (file-directory-p expanded-path)
+      (error "Directories are not allowed: %s" expanded-path))
+    (unless (or allow-missing (file-exists-p expanded-path))
+      (error "File does not exist: %s" expanded-path))
+    (when (and (file-exists-p expanded-path)
+               (not (file-regular-p expanded-path)))
+      (error "Path is not a regular file: %s" expanded-path))
+    (let ((true-path (codex-ide-mcp-bridge--file-truename expanded-path)))
+      (when codex-ide-mcp-bridge-enforce-file-roots
+        (let ((roots (codex-ide-mcp-bridge--effective-allowed-root-truenames)))
+          (unless roots
+            (error "No allowed file roots configured for bridge request"))
+          (unless (seq-some
+                   (lambda (root)
+                     (codex-ide-mcp-bridge--path-inside-root-p true-path root))
+                   roots)
+            (error "File is outside allowed roots: %s" expanded-path))))
+      expanded-path)))
+
+(defun codex-ide-mcp-bridge--assert-buffer-file-readable (buffer)
+  "Validate that BUFFER's file, when present, is readable by bridge policy."
+  (when-let* ((file (buffer-file-name buffer)))
+    (codex-ide-mcp-bridge--safe-local-file-path file))
+  buffer)
 
 (defun codex-ide-mcp-bridge--line-text-at-point ()
   "Return the current line text without text properties."
@@ -504,10 +693,15 @@ The result is an alist containing `text', `text-truncated', and
          (json-null :json-null)
          (request (json-read-from-string payload))
          (name (alist-get 'name request))
-         (params (or (alist-get 'params request) '())))
+         (params (or (alist-get 'params request) '()))
+         (meta (alist-get 'meta request))
+         (allowed-roots (and (listp meta)
+                             (alist-get 'allowedRoots meta))))
     (unless (stringp name)
       (error "Missing tool name"))
-    (json-encode (codex-ide-mcp-bridge--tool-call name params))))
+    (let ((codex-ide-mcp-bridge--request-allowed-roots
+           (and (listp allowed-roots) allowed-roots)))
+      (json-encode (codex-ide-mcp-bridge--tool-call name params)))))
 
 ;; These functions are the Elisp implementations of the MCP bridge commands.
 
@@ -554,9 +748,7 @@ The result is an alist containing `text', `text-truncated', and
   (let ((path (alist-get 'path params))
         buffer
         already-open)
-    (unless (and (stringp path) (not (string-empty-p path)))
-      (error "Missing file path"))
-    (setq path (expand-file-name path))
+    (setq path (codex-ide-mcp-bridge--safe-local-file-path path))
     (setq already-open (and (find-buffer-visiting path) t))
     (setq buffer (codex-ide-mcp-bridge--resolve-file-buffer path))
     (codex-ide-mcp-bridge--file-buffer-response
@@ -571,9 +763,7 @@ The result is an alist containing `text', `text-truncated', and
         origin
         target
         buffer)
-    (unless (and (stringp path) (not (string-empty-p path)))
-      (error "Missing file path"))
-    (setq path (expand-file-name path))
+    (setq path (codex-ide-mcp-bridge--safe-local-file-path path))
     (setq buffer (codex-ide-mcp-bridge--resolve-file-buffer path))
     (setq origin (selected-window))
     (save-selected-window
@@ -590,7 +780,9 @@ The result is an alist containing `text', `text-truncated', and
   (let* ((path (alist-get 'path params))
          (expanded-path (and (stringp path)
                              (not (string-empty-p path))
-                             (expand-file-name path)))
+                             (codex-ide-mcp-bridge--safe-local-file-path
+                              path
+                              t)))
          (buffer (and expanded-path
                       (find-buffer-visiting expanded-path))))
     (unless expanded-path
@@ -608,9 +800,7 @@ The result is an alist containing `text', `text-truncated', and
 (defun codex-ide-mcp-bridge--tool-call--lisp_check_parens (params)
   "Handle a `lisp_check_parens' bridge request with PARAMS."
   (let ((path (alist-get 'path params)))
-    (unless (and (stringp path) (not (string-empty-p path)))
-      (error "Missing file path"))
-    (setq path (expand-file-name path))
+    (setq path (codex-ide-mcp-bridge--safe-local-file-path path))
     (with-current-buffer (codex-ide-mcp-bridge--resolve-file-buffer path)
       (save-mark-and-excursion
         (save-restriction
@@ -661,9 +851,17 @@ The result is an alist containing `text', `text-truncated', and
                       (get-buffer buffer-name))))
     (unless buffer
       (error "Unknown buffer: %s" (or buffer-name "nil")))
+    (codex-ide-mcp-bridge--assert-buffer-file-readable buffer)
     (with-current-buffer buffer
-      `((buffer . ,(buffer-name buffer))
-        (text . ,(buffer-substring-no-properties (point-min) (point-max)))))))
+      (let* ((limit (if (and (integerp codex-ide-mcp-bridge-buffer-text-limit)
+                             (>= codex-ide-mcp-bridge-buffer-text-limit 0))
+                        codex-ide-mcp-bridge-buffer-text-limit
+                      codex-ide-mcp-bridge-buffer-slice-text-limit))
+             (end (min (point-max) (+ (point-min) limit)))
+             (truncated (< end (point-max))))
+        `((buffer . ,(buffer-name buffer))
+          (text-truncated . ,(codex-ide-mcp-bridge--json-bool truncated))
+          (text . ,(buffer-substring-no-properties (point-min) end)))))))
 
 (defun codex-ide-mcp-bridge--tool-call--get_buffer_diagnostics (params)
   "Handle a `get_buffer_diagnostics' bridge request with PARAMS."
@@ -711,6 +909,7 @@ The result is an alist containing `text', `text-truncated', and
          (around-point (alist-get 'around-point params))
          (requested-start (alist-get 'start-line params))
          (requested-end (alist-get 'end-line params)))
+    (codex-ide-mcp-bridge--assert-buffer-file-readable buffer)
     (with-current-buffer buffer
       (save-excursion
         (let* ((line-count (line-number-at-pos (point-max)))
@@ -745,6 +944,7 @@ The result is an alist containing `text', `text-truncated', and
 (defun codex-ide-mcp-bridge--tool-call--get_region_text (params)
   "Handle a `get_region_text' bridge request with PARAMS."
   (let ((buffer (codex-ide-mcp-bridge--buffer-from-params params (window-buffer (selected-window)))))
+    (codex-ide-mcp-bridge--assert-buffer-file-readable buffer)
     (with-current-buffer buffer
       (append
        `((buffer . ,(buffer-name buffer)))
@@ -776,6 +976,7 @@ The result is an alist containing `text', `text-truncated', and
       (error "Missing search pattern"))
     (dolist (buffer buffers)
       (when (< (length results) max-results)
+        (codex-ide-mcp-bridge--assert-buffer-file-readable buffer)
         (with-current-buffer buffer
           (when needle
             (save-excursion
@@ -850,6 +1051,8 @@ The result is an alist containing `text', `text-truncated', and
 
 (defun codex-ide-mcp-bridge--tool-call--get_messages (params)
   "Handle a `get_messages' bridge request with PARAMS."
+  (unless codex-ide-mcp-bridge-allow-sensitive-state
+    (error "Sensitive Emacs state bridge tools are disabled"))
   (let* ((max-lines (or (alist-get 'max-lines params) 200))
          (buffer (get-buffer "*Messages*")))
     (if (not buffer)
@@ -873,6 +1076,8 @@ The result is an alist containing `text', `text-truncated', and
           (buffer . :json-null)
           (prompt . :json-null)
           (input . :json-null))
+      (unless codex-ide-mcp-bridge-allow-sensitive-state
+        (error "Sensitive Emacs state bridge tools are disabled"))
       (with-current-buffer buffer
         `((active . t)
           (buffer . ,(buffer-name buffer))
