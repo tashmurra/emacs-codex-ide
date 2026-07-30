@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-from dataclasses import dataclass
 import json
 import os
 import subprocess
@@ -18,205 +17,6 @@ PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "codex-ide-emacs-bridge", "version": "0.1.0"}
 DEBUG_LOG_PATH: str | None = None
 DEFAULT_EMACSCLIENT_TIMEOUT_SEC = 55.0
-
-
-@dataclass(frozen=True)
-class EmacsBridgeCommand:
-    name: str
-    description: str
-    inputSchema: dict[str, Any]
-
-
-COMMANDS = [
-    EmacsBridgeCommand(
-        name="emacs_get_all_buffers",
-        description="Retrieve information all on buffers within the running Emacs instance.",
-        inputSchema={
-            "type": "object",
-            "properties": {},
-            "additionalProperties": False,
-        },
-    ),
-    EmacsBridgeCommand(
-        name="emacs_get_buffer_info",
-        description="Retrieve metadata -- major-mode, filename, read-only, etc -- about an open Emacs buffer is needed.",
-        inputSchema={
-            "type": "object",
-            "properties": {"buffer": {"type": "string"}},
-            "required": ["buffer"],
-            "additionalProperties": False,
-        },
-    ),
-    EmacsBridgeCommand(
-        name="emacs_get_buffer_text",
-        description=(
-            "Retrieve the full contents of a named Emacs buffer as a string. "
-            "For use when you need to view an Emacs buffer specifically, not as a general purpose file-text reader."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {"buffer": {"type": "string"}},
-            "required": ["buffer"],
-            "additionalProperties": False,
-        },
-    ),
-    EmacsBridgeCommand(
-        name="emacs_get_buffer_diagnostics",
-        description="Retrieve Flymake or Flycheck diagnostics for an Emacs buffer.",
-        inputSchema={
-            "type": "object",
-            "properties": {"buffer": {"type": "string"}},
-            "required": ["buffer"],
-            "additionalProperties": False,
-        },
-    ),
-    EmacsBridgeCommand(
-        name="emacs_get_current_context",
-        description="Retrieve selected window, selected buffer, point, region, visible range, and project context.",
-        inputSchema={
-            "type": "object",
-            "properties": {},
-            "additionalProperties": False,
-        },
-    ),
-    EmacsBridgeCommand(
-        name="emacs_get_buffer_slice",
-        description="Retrieve a bounded text slice from a named buffer by line range or around point.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "buffer": {"type": "string"},
-                "start-line": {"type": "integer", "minimum": 1},
-                "end-line": {"type": "integer", "minimum": 1},
-                "around-point": {"type": "integer", "minimum": 0},
-            },
-            "required": ["buffer"],
-            "additionalProperties": False,
-        },
-    ),
-    EmacsBridgeCommand(
-        name="emacs_get_region_text",
-        description="Retrieve the active region text and bounds from a buffer, defaulting to the selected buffer.",
-        inputSchema={
-            "type": "object",
-            "properties": {"buffer": {"type": "string"}},
-            "additionalProperties": False,
-        },
-    ),
-    EmacsBridgeCommand(
-        name="emacs_search_buffers",
-        description="Search open buffers for a string or regexp and return bounded line-oriented matches.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "pattern": {"type": "string"},
-                "buffers": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "minItems": 1,
-                },
-                "regexp": {"type": "boolean"},
-                "max-results": {"type": "integer", "minimum": 1},
-            },
-            "required": ["pattern", "buffers"],
-            "additionalProperties": False,
-        },
-    ),
-    EmacsBridgeCommand(
-        name="emacs_get_symbol_at_point",
-        description="Retrieve the symbol at point and its bounds from a buffer, defaulting to the selected buffer.",
-        inputSchema={
-            "type": "object",
-            "properties": {"buffer": {"type": "string"}},
-            "additionalProperties": False,
-        },
-    ),
-    EmacsBridgeCommand(
-        name="emacs_describe_symbol",
-        description="Describe an Emacs Lisp symbol, including docstrings and defining files when known.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "symbol": {"type": "string"},
-                "type": {"type": "string", "enum": ["any", "function", "variable", "face"]},
-            },
-            "required": ["symbol"],
-            "additionalProperties": False,
-        },
-    ),
-    EmacsBridgeCommand(
-        name="emacs_get_messages",
-        description="Retrieve recent text from the Emacs *Messages* buffer.",
-        inputSchema={
-            "type": "object",
-            "properties": {"max-lines": {"type": "integer", "minimum": 1}},
-            "additionalProperties": False,
-        },
-    ),
-    EmacsBridgeCommand(
-        name="emacs_get_minibuffer_state",
-        description="Retrieve whether the minibuffer is active and basic prompt/input state.",
-        inputSchema={
-            "type": "object",
-            "properties": {},
-            "additionalProperties": False,
-        },
-    ),
-    EmacsBridgeCommand(
-        name="emacs_get_all_windows",
-        description="Retrieve all visible windows in the selected frame and their buffers.",
-        inputSchema={
-            "type": "object",
-            "properties": {},
-            "additionalProperties": False,
-        },
-    ),
-    EmacsBridgeCommand(
-        name="emacs_ensure_file_buffer_open",
-        description="Ensure a file-backed buffer exists without displaying it in a window.",
-        inputSchema={
-            "type": "object",
-            "properties": {"path": {"type": "string"}},
-            "required": ["path"],
-            "additionalProperties": False,
-        },
-    ),
-    EmacsBridgeCommand(
-        name="emacs_show_file_buffer",
-        description="Show a file-backed buffer in a non-selected Emacs window and optionally jump to line and column.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "path": {"type": "string"},
-                "line": {"type": "integer", "minimum": 1},
-                "column": {"type": "integer", "minimum": 1},
-            },
-            "required": ["path"],
-            "additionalProperties": False,
-        },
-    ),
-    EmacsBridgeCommand(
-        name="emacs_kill_file_buffer",
-        description="Kill the buffer visiting a file, prompting if it has unsaved changes.",
-        inputSchema={
-            "type": "object",
-            "properties": {"path": {"type": "string"}},
-            "required": ["path"],
-            "additionalProperties": False,
-        },
-    ),
-    EmacsBridgeCommand(
-        name="emacs_lisp_check_parens",
-        description="Check a Lisp source file for mismatched parentheses and report the mismatch location when found.",
-        inputSchema={
-            "type": "object",
-            "properties": {"path": {"type": "string"}},
-            "required": ["path"],
-            "additionalProperties": False,
-        },
-    ),
-]
-COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}
 
 
 class ProtocolError(Exception):
@@ -325,6 +125,8 @@ class EmacsProxy:
         self.server_name = server_name
         self.timeout_sec = timeout_sec
         self.allowed_roots = allowed_roots
+        self._tool_catalog: list[dict[str, Any]] | None = None
+        self._tool_names: set[str] | None = None
 
     def _elisp_string(self, value: str) -> str:
         return json.dumps(value, ensure_ascii=True)
@@ -344,14 +146,19 @@ class EmacsProxy:
             f"(encode-coding-string (codex-ide-mcp-bridge--json-tool-call {self._elisp_string(payload)}) 'utf-8) t)"
         )
 
-    def call_tool(self, name: str, params: dict[str, Any] | None = None) -> Any:
-        params = params or {}
+    def _catalog_expression(self) -> str:
+        return (
+            "(base64-encode-string "
+            "(encode-coding-string (codex-ide-mcp-bridge--json-tool-catalog) 'utf-8) t)"
+        )
+
+    def _run_expression(self, expression: str, operation: str) -> Any:
         command = [self.emacsclient]
         if self.server_name:
             command.extend(["-s", self.server_name])
-        command.extend(["--eval", self._tool_call_expression(name, params)])
+        command.extend(["--eval", expression])
         debug_log(
-            "dispatch command:",
+            f"{operation} command:",
             f"argc={len(command)}",
             f"server_name={'set' if self.server_name else 'default'}",
             f"allowed_roots={len(self.allowed_roots)}",
@@ -366,14 +173,14 @@ class EmacsProxy:
             )
         except subprocess.TimeoutExpired as exc:
             elapsed = time.monotonic() - started
-            debug_log(f"dispatch timed out after {elapsed:.3f}s")
-            debug_bytes("dispatch stdout", exc.stdout or b"")
-            debug_bytes("dispatch stderr", exc.stderr or b"")
+            debug_log(f"{operation} timed out after {elapsed:.3f}s")
+            debug_bytes(f"{operation} stdout", exc.stdout or b"")
+            debug_bytes(f"{operation} stderr", exc.stderr or b"")
             raise RuntimeError(f"emacsclient timed out after {self.timeout_sec:g}s") from exc
         elapsed = time.monotonic() - started
-        debug_log(f"dispatch return code: {completed.returncode} elapsed: {elapsed:.3f}s")
-        debug_bytes("dispatch stdout", completed.stdout)
-        debug_bytes("dispatch stderr", completed.stderr)
+        debug_log(f"{operation} return code: {completed.returncode} elapsed: {elapsed:.3f}s")
+        debug_bytes(f"{operation} stdout", completed.stdout)
+        debug_bytes(f"{operation} stderr", completed.stderr)
         if completed.returncode != 0:
             stderr = completed.stderr.strip() or completed.stdout.strip() or b"emacsclient failed"
             raise RuntimeError(stderr.decode("utf-8", errors="replace"))
@@ -385,6 +192,58 @@ class EmacsProxy:
             return json.loads(decoded.decode("utf-8"))
         except (ValueError, UnicodeDecodeError, base64.binascii.Error) as exc:
             raise RuntimeError(f"invalid bridge response: {exc}") from exc
+
+    def tool_catalog(self) -> list[dict[str, Any]]:
+        if self._tool_catalog is not None:
+            return self._tool_catalog
+        catalog = self._run_expression(self._catalog_expression(), "catalog")
+        if not isinstance(catalog, list) or not catalog:
+            raise RuntimeError("invalid bridge catalog")
+        names: set[str] = set()
+        public_catalog: list[dict[str, Any]] = []
+        for item in catalog:
+            if not isinstance(item, dict) or set(item) != {
+                "name",
+                "description",
+                "inputSchema",
+            }:
+                raise RuntimeError("invalid bridge catalog")
+            name = item["name"]
+            description = item["description"]
+            schema = item["inputSchema"]
+            if (
+                not isinstance(name, str)
+                or not name
+                or name in names
+                or not isinstance(description, str)
+                or not description
+                or not isinstance(schema, dict)
+                or schema.get("type") != "object"
+                or not isinstance(schema.get("properties"), dict)
+                or schema.get("additionalProperties") is not False
+            ):
+                raise RuntimeError("invalid bridge catalog")
+            names.add(name)
+            public_catalog.append(
+                {
+                    "name": name,
+                    "description": description,
+                    "inputSchema": schema,
+                }
+            )
+        self._tool_catalog = public_catalog
+        self._tool_names = names
+        return self._tool_catalog
+
+    def call_tool(self, name: str, params: dict[str, Any] | None = None) -> Any:
+        params = params or {}
+        self.tool_catalog()
+        if self._tool_names is None or name not in self._tool_names:
+            raise RuntimeError("unknown bridge tool")
+        return self._run_expression(
+            self._tool_call_expression(name, params),
+            f"dispatch {name}",
+        )
 
 
 def text_result(text: str, *, is_error: bool = False) -> dict[str, Any]:
@@ -406,23 +265,15 @@ def structured_result(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def schema_for_tools() -> list[dict[str, Any]]:
-    return [
-        {
-            "name": command.name,
-            "description": command.description,
-            "inputSchema": command.inputSchema,
-        }
-        for command in COMMANDS
-    ]
-
-
 def handle_tool_call(proxy: EmacsProxy, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    if name not in COMMANDS_BY_NAME:
-        return text_result(f"Unknown tool: {name}", is_error=True)
     if not isinstance(arguments, dict):
         return text_result("Invalid tool arguments: expected object", is_error=True)
-    result = proxy.call_tool(name, arguments)
+    try:
+        result = proxy.call_tool(name, arguments)
+    except RuntimeError as exc:
+        if str(exc) == "unknown bridge tool":
+            return text_result("Unknown tool", is_error=True)
+        raise
     if isinstance(result, dict):
         return structured_result(result)
     return text_result(json.dumps(result, indent=2, sort_keys=True))
@@ -510,7 +361,7 @@ def main() -> int:
                     {
                         "jsonrpc": "2.0",
                         "id": request_id,
-                        "result": {"tools": schema_for_tools()},
+                        "result": {"tools": proxy.tool_catalog()},
                     }
                 )
             elif method == "tools/call":

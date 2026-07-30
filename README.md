@@ -89,17 +89,19 @@ To install using `use-package` and [straight.el](https://github.com/radian-softw
 
 After installation, run `M-x codex-ide-menu` or `M-x codex-ide` to start a session for the current project.
 
-### MCP Bridge Hardening Experiment
+### MCP Bridge Hardening
 
-The `harden/mcp-bridge-secure-defaults` branch in this fork contains an
-experimental, secure-defaults pass over the optional Emacs MCP bridge. It keeps
-the bridge usable while making file access project-scoped, disabling default
-debug logs, requiring approval by default, bounding full-buffer text, and making
-Messages/minibuffer access opt-in.
+The optional Emacs MCP bridge uses a single Emacs-side policy catalog and
+authorization gateway. The gateway keeps tool schemas, dispatch handlers,
+approval classes, project scope, resource resolution, result filtering, and
+limits together so incomplete or contradictory tool declarations fail closed.
+It also retains the secure defaults from the earlier experiment: project-scoped
+access, opt-in redacted logs, approval by default, bounded content, and
+opt-in Messages/minibuffer access.
 
 See [docs/mcp-bridge-hardening-experiment.md](docs/mcp-bridge-hardening-experiment.md)
-for the threat model, compatibility notes, validation commands, and suggested
-upstream etiquette.
+for the threat model, central gateway design, compatibility notes, and
+validation commands.
 
 ## Getting Started
 
