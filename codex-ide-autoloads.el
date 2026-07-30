@@ -13,221 +13,235 @@
 
 (let ((loads (get 'codex-ide 'custom-loads))) (if (member '"codex-ide" loads) nil (put 'codex-ide 'custom-loads (cons '"codex-ide" loads)) (put 'tools 'custom-loads (cons 'codex-ide (get 'tools 'custom-loads)))))
 (defvar codex-ide-cli-path "codex"
-  "Path to the Codex CLI executable.")
+"Path to the Codex CLI executable.")
 (custom-autoload 'codex-ide-cli-path "codex-ide" t)
 (defvar codex-ide-buffer-name-function #'codex-ide--default-buffer-name
-  "Function used to derive the Codex session buffer name.")
+"Function used to derive the Codex session buffer name.")
 (custom-autoload 'codex-ide-buffer-name-function "codex-ide" t)
 (defvar codex-ide-cli-extra-flags ""
-  "Additional flags appended to the `codex app-server` command.")
+"Additional flags appended to the `codex app-server` command.")
 (custom-autoload 'codex-ide-cli-extra-flags "codex-ide" t)
 (defvar codex-ide-model nil
-  "Optional model name for new or resumed threads and later turns.")
+"Optional model name for new or resumed threads and later turns.")
 (custom-autoload 'codex-ide-model "codex-ide" t)
 (put 'codex-ide-model 'safe-local-variable (lambda (value) (or (null value) (stringp value))))
 (defvar codex-ide-fast "off"
-  "Whether to request Codex Fast mode.
+"Whether to request Codex Fast mode.
 When set to \"on\", Codex IDE sends app-server `serviceTier' as \"priority\".
 When set to \"off\", Codex IDE leaves `serviceTier' unset.")
 (custom-autoload 'codex-ide-fast "codex-ide" t)
 (put 'codex-ide-fast 'safe-local-variable (lambda (value) (member value '("off" "on"))))
 (defvar codex-ide-reasoning-effort "medium"
-  "Reasoning effort sent for new or resumed threads and later turns.")
+"Reasoning effort sent for new or resumed threads and later turns.")
 (custom-autoload 'codex-ide-reasoning-effort "codex-ide" t)
 (put 'codex-ide-reasoning-effort 'safe-local-variable (lambda (value) (member value '("none" "minimal" "low" "medium" "high" "xhigh"))))
 (defvar codex-ide-running-submit-action 'steer
-  "Action used by `codex-ide-submit' while a Codex turn is running.")
+"Action used by `codex-ide-submit' while a Codex turn is running.")
 (custom-autoload 'codex-ide-running-submit-action "codex-ide" t)
 (defvar codex-ide-image-detail "auto"
-  "Image detail setting used when submitting local image files.")
+"Image detail setting used when submitting local image files.")
 (custom-autoload 'codex-ide-image-detail "codex-ide" t)
 (put 'codex-ide-image-detail 'safe-local-variable (lambda (value) (member value '("auto" "low" "high" "original"))))
 (defvar codex-ide-image-thumbnail-max-height 96
-  "Maximum height in pixels for local image thumbnail previews.
+"Maximum height in pixels for local image thumbnail previews.
 Set to nil to disable thumbnail previews.")
 (custom-autoload 'codex-ide-image-thumbnail-max-height "codex-ide" t)
 (put 'codex-ide-image-thumbnail-max-height 'safe-local-variable (lambda (value) (or (null value) (and (integerp value) (> value 0)))))
 (defvar codex-ide-prompt-placeholder-text "Tell Codex what to do..."
-  "Placeholder text displayed in an empty idle Codex prompt.")
+"Placeholder text displayed in an empty idle Codex prompt.")
 (custom-autoload 'codex-ide-prompt-placeholder-text "codex-ide" t)
 (defvar codex-ide-steering-placeholder-text "Running..."
-  "Placeholder text displayed in an empty Codex prompt during a running turn.")
+"Placeholder text displayed in an empty Codex prompt during a running turn.")
 (custom-autoload 'codex-ide-steering-placeholder-text "codex-ide" t)
 (defvar codex-ide-placeholder-ellipsis-animation-interval 0.5
-  "Seconds between animated trailing ellipsis frames in busy prompt help.
+"Seconds between animated trailing ellipsis frames in busy prompt help.
 When nil or zero, busy prompt help displays its text unchanged.")
 (custom-autoload 'codex-ide-placeholder-ellipsis-animation-interval "codex-ide" t)
 (defvar codex-ide-status-placeholder-text-alist '(("approval" . "Seeking approval...") ("interrupting" . "Interrupting..."))
-  "Alist mapping Codex session statuses to active prompt placeholder text.
+"Alist mapping Codex session statuses to active prompt placeholder text.
 
 Entries are matched against lowercase status strings.  When a busy session
 status has no entry here, `codex-ide-steering-placeholder-text' is used.")
 (custom-autoload 'codex-ide-status-placeholder-text-alist "codex-ide" t)
 (defvar codex-ide-session-baseline-prompt "\n- You are a Codex server running inside Emacs.\n- You can use MCP tools to inspect and interact with the running Emacs session.\n- Interpret Emacs terminology as relevant context to the user's request: buffers, regions, windows, point, mark, current file, etc.\n- Responses are rendered as Markdown in an Emacs buffer.\n- Markdown pipe tables are rendered as visible tables.\n- In table cells, wrap code-like identifiers, filenames, paths, symbols, and expressions in backticks.\n- Use markdown links for code references, for example [`foo.el`](/tmp/foo.el#L3C2).\n- Avoid bare underscores or asterisks for code-like text inside tables; use backticks instead.\n- Do not needlessly use Emacs commands to accomplish agent tasks."
-  "Optional baseline prompt injected into the first real prompt of a new thread.")
+"Optional baseline prompt injected into the first real prompt of a new thread.")
 (custom-autoload 'codex-ide-session-baseline-prompt "codex-ide" t)
 (defvar codex-ide-emacs-context-policy 'all
-  "Which Emacs context blocks to include in submitted prompts.
+"Which Emacs context blocks to include in submitted prompts.
 
 The session context block contains `codex-ide-session-baseline-prompt' and is
 sent at most once per thread.  The prompt context block contains the focused
 Emacs buffer, point, and active selection for each prompt.")
 (custom-autoload 'codex-ide-emacs-context-policy "codex-ide" t)
 (defvar codex-ide-buffer-name-prefix "codex"
-  "Prefix used when creating Codex session buffer names.")
+"Prefix used when creating Codex session buffer names.")
 (custom-autoload 'codex-ide-buffer-name-prefix "codex-ide" t)
 (defvar codex-ide-new-session-split nil
-  "Window split direction to use when showing newly created Codex sessions.")
+"Window split direction to use when showing newly created Codex sessions.")
 (custom-autoload 'codex-ide-new-session-split "codex-ide" t)
 (defvar codex-ide-diff-inline-fold-threshold 12
-  "Maximum inline diff lines to show before folding by default.
+"Maximum inline diff lines to show before folding by default.
 When nil, inline diffs never start folded.")
 (custom-autoload 'codex-ide-diff-inline-fold-threshold "codex-ide" t)
 (defvar codex-ide-diff-auto-display-policy 'never
-  "When Codex should auto-display file-change diffs in a standalone diff buffer.")
+"When Codex should auto-display file-change diffs in a standalone diff buffer.")
 (custom-autoload 'codex-ide-diff-auto-display-policy "codex-ide" t)
 (defvar codex-ide-session-enable-visual-line-mode t
-  "Whether Codex session buffers should enable `visual-line-mode' by default.")
+"Whether Codex session buffers should enable `visual-line-mode' by default.")
 (custom-autoload 'codex-ide-session-enable-visual-line-mode "codex-ide" t)
 (defvar codex-ide-approval-policy "on-request"
-  "Approval policy for new or resumed Codex threads and later turns.")
+"Approval policy for new or resumed Codex threads and later turns.")
 (custom-autoload 'codex-ide-approval-policy "codex-ide" t)
 (defvar codex-ide-sandbox-mode "workspace-write"
-  "Sandbox mode for new or resumed Codex threads and later turns.")
+"Sandbox mode for new or resumed Codex threads and later turns.")
 (custom-autoload 'codex-ide-sandbox-mode "codex-ide" t)
 (defvar codex-ide-personality "pragmatic"
-  "Personality for new or resumed Codex threads and later turns.")
+"Personality for new or resumed Codex threads and later turns.")
 (custom-autoload 'codex-ide-personality "codex-ide" t)
 (defvar codex-ide-request-timeout 10
-  "Seconds to wait for synchronous app-server responses.")
+"Seconds to wait for synchronous app-server responses.")
 (custom-autoload 'codex-ide-request-timeout "codex-ide" t)
 (defvar codex-ide-log-max-lines 10000
-  "Maximum number of lines to keep in each Codex log buffer.")
+"Maximum number of lines to keep in each Codex log buffer.")
 (custom-autoload 'codex-ide-log-max-lines "codex-ide" t)
 (defvar codex-ide-logging-enabled nil
-  "Whether codex-ide should create and write diagnostic log buffers.")
+"Whether codex-ide should create and write diagnostic log buffers.")
 (custom-autoload 'codex-ide-logging-enabled "codex-ide" t)
 (defvar codex-ide-log-stream-deltas nil
-  "Whether to log every streamed output delta.")
+"Whether to log every streamed output delta.")
 (custom-autoload 'codex-ide-log-stream-deltas "codex-ide" t)
 (defvar codex-ide-resume-summary-turn-limit 100
-  "How many recent turns to summarize when resuming a stored thread.")
+"How many recent turns to summarize when resuming a stored thread.")
 (custom-autoload 'codex-ide-resume-summary-turn-limit "codex-ide" t)
 (defvar codex-ide-thread-list-default-limit 100
-  "Default number of stored threads to request when listing threads.
+"Default number of stored threads to request when listing threads.
 
 This value is used when protocol callers do not pass an explicit
 thread-list limit.")
 (custom-autoload 'codex-ide-thread-list-default-limit "codex-ide" t)
 (autoload 'codex-ide-toggle-logging-enabled "codex-ide"
-  "Toggle `codex-ide-logging-enabled' interactively." t)
+"Toggle `codex-ide-logging-enabled' interactively." t)
 (register-definition-prefixes "codex-ide" '("codex-ide-buffer-display-when-approval-required"))
 
 
 ;;; Generated autoloads from codex-ide-mcp-bridge.el
 
 (defvar codex-ide-enable-emacs-tool-bridge nil
-  "Whether codex-ide should expose Emacs tools to Codex via MCP.
+"Whether codex-ide should expose Emacs tools to Codex via MCP.
 
 When non-nil, codex-ide starts an MCP bridge server alongside `codex app-server'
 and ensures the current Emacs instance is reachable via `emacsclient'.")
 (custom-autoload 'codex-ide-enable-emacs-tool-bridge "codex-ide-mcp-bridge" t)
 (defvar codex-ide-want-mcp-bridge 'prompt
-  "Whether codex-ide should start the Emacs MCP bridge.
+"Whether codex-ide should start the Emacs MCP bridge.
 
 When nil, do not start the bridge.  When t, start the bridge without prompting.
 When `prompt', ask before enabling the bridge, matching the historical startup
 behavior.")
 (custom-autoload 'codex-ide-want-mcp-bridge "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-tool-bridge-name "codex-ide-emacs-mcp"
-  "Name used when registering the Emacs MCP bridge with Codex.")
+"Name used when registering the Emacs MCP bridge with Codex.")
 (custom-autoload 'codex-ide-emacs-tool-bridge-name "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-bridge-python-command "python3"
-  "Python executable used to launch the standalone Emacs MCP bridge.")
+"Python executable used to launch the standalone Emacs MCP bridge.")
 (custom-autoload 'codex-ide-emacs-bridge-python-command "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-bridge-emacsclient-command "emacsclient"
-  "Path to the `emacsclient' executable used by the bridge.")
+"Path to the `emacsclient' executable used by the bridge.")
 (custom-autoload 'codex-ide-emacs-bridge-emacsclient-command "codex-ide-mcp-bridge" t)
 (defvar codex-ide-mcp-bridge-buffer-slice-text-limit 50000
-  "Maximum number of characters returned by one buffer slice request.")
+"Maximum number of characters returned by one buffer slice request.")
 (custom-autoload 'codex-ide-mcp-bridge-buffer-slice-text-limit "codex-ide-mcp-bridge" t)
 (defvar codex-ide-mcp-bridge-enforce-file-roots t
-  "Whether bridge file tools should be constrained to allowed roots.")
+"Obsolete compatibility setting; bridge file roots are always enforced.
+
+Setting this to nil no longer disables file-root enforcement.")
 (custom-autoload 'codex-ide-mcp-bridge-enforce-file-roots "codex-ide-mcp-bridge" t)
 (defvar codex-ide-mcp-bridge-allowed-roots nil
-  "Additional local roots bridge file tools may access.
+"Additional local roots bridge file tools may access.
 
 Session startup automatically passes the session working directory as an
 allowed root.  This option is for explicit extra roots.")
 (custom-autoload 'codex-ide-mcp-bridge-allowed-roots "codex-ide-mcp-bridge" t)
 (defvar codex-ide-mcp-bridge-buffer-text-limit codex-ide-mcp-bridge-buffer-slice-text-limit
-  "Maximum number of characters returned by a full buffer text request.")
+"Maximum number of characters returned by a full buffer text request.")
 (custom-autoload 'codex-ide-mcp-bridge-buffer-text-limit "codex-ide-mcp-bridge" t)
 (defvar codex-ide-mcp-bridge-allow-sensitive-state nil
-  "Whether bridge tools may expose Messages and active minibuffer contents.")
+"Whether bridge tools may expose Messages and active minibuffer contents.")
 (custom-autoload 'codex-ide-mcp-bridge-allow-sensitive-state "codex-ide-mcp-bridge" t)
+(defvar codex-ide-mcp-bridge-log-policy-decisions nil
+"Whether to log redacted MCP bridge policy decisions.
+
+Events contain only the tool name, fixed policy class, allow or deny outcome,
+and a reason code.  Tool arguments, paths, buffer text, and results are never
+included.")
+(custom-autoload 'codex-ide-mcp-bridge-log-policy-decisions "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-bridge-script-path nil
-  "Path to the standalone Emacs MCP bridge script.
+"Path to the standalone Emacs MCP bridge script.
 
 When nil, codex-ide uses `bin/codex-ide-mcp-server.py' from the package directory.")
 (custom-autoload 'codex-ide-emacs-bridge-script-path "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-bridge-server-name nil
-  "Server name the bridge should use with `emacsclient'.
+"Server name the bridge should use with `emacsclient'.
 
 When nil, use the current value of `server-name'.")
 (custom-autoload 'codex-ide-emacs-bridge-server-name "codex-ide-mcp-bridge" t)
 (defvar codex-ide-suppress-server-start-prompts nil
-  "When non-nil, start the Emacs server for the bridge without prompting.
+"When non-nil, start the Emacs server for the bridge without prompting.
 
 This only affects explicit calls to `codex-ide-mcp-bridge-ensure-server'.  Session
 startup now prompts once about enabling the Emacs tool bridge, and enabling the
 bridge starts the Emacs server automatically when needed.")
 (custom-autoload 'codex-ide-suppress-server-start-prompts "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-bridge-startup-timeout 10
-  "Startup timeout in seconds for the Emacs MCP bridge.")
+"Startup timeout in seconds for the Emacs MCP bridge.")
 (custom-autoload 'codex-ide-emacs-bridge-startup-timeout "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-bridge-tool-timeout 60
-  "Tool-call timeout in seconds for the Emacs MCP bridge.")
+"Tool-call timeout in seconds for the Emacs MCP bridge.")
 (custom-autoload 'codex-ide-emacs-bridge-tool-timeout "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-bridge-require-approval t
-  "Whether Emacs MCP bridge tool calls should require user approval.
+"Whether Emacs MCP bridge tool calls should require user approval.
 
 When nil, `codex-ide' auto-accepts approval-like MCP elicitations that clearly
 refer to the configured Emacs MCP bridge server or one of its tools.")
 (custom-autoload 'codex-ide-emacs-bridge-require-approval "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-bridge-auto-approved-tools '("emacs_get_all_buffers" "emacs_get_buffer_info" "emacs_get_buffer_diagnostics" "emacs_get_symbol_at_point" "emacs_describe_symbol" "emacs_get_all_windows")
-  "Bridge tools eligible for approval auto-exemption when approvals are disabled.")
+"Bridge tools requested for auto-exemption when approvals are disabled.
+
+This list can narrow the fixed policy catalog, but it cannot make a tool
+auto-eligible when its catalog policy requires approval.")
 (custom-autoload 'codex-ide-emacs-bridge-auto-approved-tools "codex-ide-mcp-bridge" t)
 (autoload 'codex-ide-mcp-bridge-request-exempt-from-approval-p "codex-ide-mcp-bridge"
-  "Return non-nil when PARAMS describe an Emacs MCP bridge request.
+"Return non-nil when PARAMS describe an Emacs MCP bridge request.
 
 This is used to bypass bridge-originated elicitation prompts when
 `codex-ide-emacs-bridge-require-approval' is nil.
 
 (fn PARAMS)")
 (autoload 'codex-ide-mcp-bridge-enabled-p "codex-ide-mcp-bridge"
-  "Return non-nil when the Emacs MCP bridge should be enabled.")
+"Return non-nil when the Emacs MCP bridge should be enabled.")
 (autoload 'codex-ide-mcp-bridge-enable "codex-ide-mcp-bridge"
-  "Enable the Emacs MCP bridge and ensure the target Emacs server is running.")
+"Enable the Emacs MCP bridge and ensure the target Emacs server is running.")
 (autoload 'codex-ide-mcp-bridge-disable "codex-ide-mcp-bridge"
-  "Disable the Emacs MCP bridge.")
+"Disable the Emacs MCP bridge.")
 (autoload 'codex-ide-mcp-bridge-prompt-to-enable "codex-ide-mcp-bridge"
-  "Prompt once to enable the Emacs MCP bridge for session startup.")
+"Prompt once to enable the Emacs MCP bridge for session startup.")
 (autoload 'codex-ide-mcp-bridge-status "codex-ide-mcp-bridge"
-  "Return an alist describing the current Emacs bridge configuration.")
+"Return an alist describing the current Emacs bridge configuration.")
 (autoload 'codex-ide-mcp-bridge-ensure-server "codex-ide-mcp-bridge"
-  "Ensure the target Emacs server for the bridge is running.")
+"Ensure the target Emacs server for the bridge is running.")
 (autoload 'codex-ide-mcp-bridge-mcp-config-args "codex-ide-mcp-bridge"
-  "Return `codex app-server' CLI args that register the Emacs MCP bridge.
+"Return `codex app-server' CLI args that register the Emacs MCP bridge.
 
 When WORKING-DIR is non-nil, pass it to the bridge server as an allowed root.
 
 (fn &optional WORKING-DIR)")
+(autoload 'codex-ide-mcp-bridge--json-tool-catalog "codex-ide-mcp-bridge"
+"Return the validated public MCP tool catalog as JSON.")
 (autoload 'codex-ide-mcp-bridge--json-tool-call "codex-ide-mcp-bridge"
-  "Decode JSON PAYLOAD, dispatch a bridge tool call, and return JSON.
+"Decode JSON PAYLOAD, dispatch a bridge tool call, and return JSON.
 
 (fn PAYLOAD)")
-(register-definition-prefixes "codex-ide-mcp-bridge" '("codex-ide-mcp-bridge-"))
+(register-definition-prefixes "codex-ide-mcp-bridge" '("codex-ide-mcp-"))
 
 
 ;;; Generated autoloads from codex-ide-transient.el
@@ -478,19 +492,19 @@ while 1 would fully replace the background with the foreground color.")
 ;;; Generated autoloads from codex-ide-session.el
 
 (autoload 'codex-ide "codex-ide-session"
-  "Start Codex for the current project or directory." t)
+"Start Codex for the current project or directory." t)
 (autoload 'codex-ide-continue "codex-ide-session"
-  "Resume the most recent Codex session for the current directory." t)
+"Resume the most recent Codex session for the current directory." t)
 (autoload 'codex-ide-show-cli-info "codex-ide-session"
-  "Report Codex CLI availability and version." t)
+"Report Codex CLI availability and version." t)
 (autoload 'codex-ide-stop "codex-ide-session"
-  "Stop the Codex session associated with the current session buffer." t)
+"Stop the Codex session associated with the current session buffer." t)
 (autoload 'codex-ide-reset-current-session "codex-ide-session"
-  "Stop the current Codex session and start a new one in the same buffer." t)
+"Stop the current Codex session and start a new one in the same buffer." t)
 (autoload 'codex-ide-switch-to-buffer "codex-ide-session"
-  "Show the Codex buffer for the current project." t)
+"Show the Codex buffer for the current project." t)
 (autoload 'codex-ide-interrupt "codex-ide-session"
-  "Interrupt the active Codex turn for the current project." t)
+"Interrupt the active Codex turn for the current project." t)
 (register-definition-prefixes "codex-ide-session" '("codex-ide--"))
 
 
@@ -697,7 +711,7 @@ interval as the default.  Active loops are rescheduled from now.
 ;;; Generated autoloads from codex-ide-mention.el
 
 (defvar codex-ide-mention-allow-uncached-skill-paths nil
-  "Whether linked skill mentions may use paths absent from the skill cache.
+"Whether linked skill mentions may use paths absent from the skill cache.
 
 When nil, linked or history-decoded `$skill' mentions only become structured
 skill input items when their target path matches a cached skill.  Mentions
@@ -705,10 +719,14 @@ selected through completion keep their recorded binding even before a refreshed
 cache is available.")
 (custom-autoload 'codex-ide-mention-allow-uncached-skill-paths "codex-ide-mention" t)
 (autoload 'codex-ide-mention-complete-or-newline "codex-ide-mention"
-  "Complete the active mention or insert a newline.
+"Complete the active mention or insert a newline.
 Unlike slash commands, this never submits the prompt." t)
 (register-definition-prefixes "codex-ide-mention" '("codex-ide-mention-"))
 
+
+;;; Generated autoloads from codex-ide-mcp-policy.el
+
+(register-definition-prefixes "codex-ide-mcp-policy" '("codex-ide-mcp-policy-"))
 
 ;;; End of scraped data
 

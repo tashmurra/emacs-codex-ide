@@ -8982,11 +8982,17 @@
 	(kill-buffer buffer))))
 
   (ert-deftest codex-ide-mcp-server-schema-includes-buffer-info-and-text-tools ()
-    (with-temp-buffer
-      (insert-file-contents (expand-file-name "bin/codex-ide-mcp-server.py"
-                                              default-directory))
-      (should (re-search-forward "name=\"emacs_get_buffer_info\"" nil t))
-      (should (re-search-forward "name=\"emacs_get_buffer_text\"" nil t))))
+    (let ((catalog (codex-ide-mcp-policy-public-catalog)))
+      (should
+       (seq-find
+        (lambda (entry)
+          (equal (alist-get 'name entry) "emacs_get_buffer_info"))
+        catalog))
+      (should
+       (seq-find
+        (lambda (entry)
+          (equal (alist-get 'name entry) "emacs_get_buffer_text"))
+        catalog))))
 
   (ert-deftest codex-ide-stop-errors-outside-session-buffer ()
     (let ((project-dir (codex-ide-test--make-temp-project)))

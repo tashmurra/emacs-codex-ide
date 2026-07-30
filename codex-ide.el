@@ -4,7 +4,7 @@
 
 ;; Author: Duncan Gillis
 ;; URL: https://github.com/dgillis/emacs-codex-ide
-;; Version: 0.3.2
+;; Version: 0.3.3
 ;; Package-Requires: ((emacs "28.1") (transient "0.9.0"))
 ;; Keywords: codex, ai, agent, tools
 
@@ -320,6 +320,7 @@ thread-list limit."
 (require 'codex-ide-transcript)
 (require 'codex-ide-images)
 (require 'codex-ide-transient)
+(require 'codex-ide-mcp-policy)
 (require 'codex-ide-mcp-bridge)
 (require 'codex-ide-session)
 (require 'codex-ide-loop)
