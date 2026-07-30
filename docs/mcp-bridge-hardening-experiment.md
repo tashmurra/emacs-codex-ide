@@ -10,8 +10,8 @@ bridge, its launcher, generated autoloads, and bridge-focused tests.
 
 ## Status
 
-- Branch: `harden/mcp-bridge-secure-defaults`
-- Base: upstream `dgillis/main` at `1418bd7`
+- Branch: `codex/mcp-bridge-policy-gateway`
+- Base: `security-hardening` at `7f0db848e81b18297eb2f01ae8bcd5c32fb5d3ca`
 - Scope: experimental hardening for review and iteration
 - Fork target: `tashmurra/emacs-codex-ide`
 
@@ -39,6 +39,49 @@ capability boundary:
 
 The experiment assumes the bridge should remain useful, but should default to a
 project-scoped, low-noise posture.
+
+## Central Policy Gateway
+
+`codex-ide-mcp-policy.el` is the single validated catalog for the bridge's 17
+tools. Each entry contains the public MCP schema and internal handler, approval,
+scope, access, resource, limit, and result-filter policy. Catalog validation
+rejects incomplete declarations, duplicate or unknown names, illegal
+combinations, malformed schemas, and missing handlers.
+
+The Python MCP process no longer owns a static schema catalog. It fetches the
+public catalog from Emacs through `emacsclient`, validates that only `name`,
+`description`, and `inputSchema` are present, and caches the result for the
+process lifetime. A catalog failure prevents both tool listing and dispatch.
+Restart a Codex session to pick up registry changes.
+
+The gateway is the default dispatcher. Before calling a handler it constructs a
+short-lived request context, canonicalizes configured roots, resolves every
+project resource, and applies the tool's fixed policy. The internal legacy
+dispatcher remains available for compatibility comparison and rollback during
+the migration window, but it is not exposed as a public option.
+
+Low-risk metadata tools are only auto-eligible when both their fixed registry
+classification and `codex-ide-emacs-bridge-auto-approved-tools` allow it.
+Content, action, sensitive-state, and unknown tools cannot be promoted by the
+user list.
+
+Global metadata remains useful without exposing unrelated identities:
+
+- `emacs_get_all_windows` retains geometry and non-identifying window state but
+  returns null buffer/file identities with `scoped: false` outside allowed
+  roots.
+- `emacs_describe_symbol` redacts out-of-scope definition paths and reports
+  `function-file-scoped` and `variable-file-scoped`.
+- `emacs_get_all_buffers` omits out-of-scope and sensitive buffers entirely.
+
+Policy decision logging is opt-in:
+
+```emacs-lisp
+(setq codex-ide-mcp-bridge-log-policy-decisions t)
+```
+
+Events contain only tool name, fixed policy class, allow/deny outcome, and
+reason code. Arguments, paths, buffer text, and results are never logged.
 
 ## Secure Defaults Added Here
 
@@ -73,12 +116,14 @@ The Emacs side enforces:
 - directory rejection
 - missing-file rejection for tools that open or read files
 
-The root policy is controlled by:
+Root enforcement is unconditional. The old toggle is deprecated as of 0.3.3:
 
 ```emacs-lisp
-(setq codex-ide-mcp-bridge-enforce-file-roots t)
 (setq codex-ide-mcp-bridge-allowed-roots nil)
 ```
+
+`codex-ide-mcp-bridge-enforce-file-roots` remains for one compatibility release.
+Setting it to nil emits one warning and is ignored.
 
 `codex-ide-mcp-bridge-allowed-roots` is for explicit additional local roots. The
 session working directory is still passed automatically at session startup.
@@ -188,12 +233,20 @@ The branch adds ERT coverage for:
 - absence of default Python debug logs
 - redacted opt-in debug logs
 - internal forwarding of `--allowed-root` metadata
+- complete and fail-closed policy catalog validation
+- catalog fetch, validation, and process-lifetime caching in the Python proxy
+- file-backed and non-file project resource authorization
+- global window and symbol identity redaction
+- generic content-tool denial for Messages and active minibuffer state
+- redacted policy decision events
+- gateway/legacy response comparison and policy overhead benchmarking
 - cached and uncached skill mention path handling
 
 Validated with:
 
 ```sh
-bin/run-tests.sh --test-file tests/codex-ide-mcp-bridge-tests.el --test-file tests/codex-ide-mcp-tests.el
+bin/run-tests.sh --test-file tests/codex-ide-mcp-policy-tests.el --test-file tests/codex-ide-mcp-bridge-tests.el --test-file tests/codex-ide-mcp-tests.el
+bin/benchmark-mcp-policy.sh
 bin/generate-autoloads.sh
 bin/run-tests.sh
 bin/pre-commit-check.sh
@@ -226,9 +279,9 @@ To keep this branch current with upstream:
 ```sh
 git fetch origin
 git fetch upstream
-git switch harden/mcp-bridge-secure-defaults
+git switch codex/mcp-bridge-policy-gateway
 git rebase upstream/main
-bin/run-tests.sh --test-file tests/codex-ide-mcp-bridge-tests.el --test-file tests/codex-ide-mcp-tests.el
+bin/run-tests.sh --test-file tests/codex-ide-mcp-policy-tests.el --test-file tests/codex-ide-mcp-bridge-tests.el --test-file tests/codex-ide-mcp-tests.el
 bin/run-tests.sh
 bin/pre-commit-check.sh
 ```

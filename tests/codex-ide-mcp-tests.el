@@ -170,7 +170,14 @@ Return (EXIT-CODE . OUTPUT)."
             (insert "import sys\n")
             (insert (format "with open(%S, 'w', encoding='utf-8') as handle:\n" argv-log))
             (insert "    json.dump(sys.argv[1:], handle)\n")
-            (insert "print(json.dumps(\"[]\"))\n"))
+            (insert "import base64\n")
+            (insert "expr = sys.argv[-1]\n")
+            (insert "if 'json-tool-catalog' in expr:\n")
+            (insert "    value = [{'name': 'emacs_show_file_buffer', 'description': 'Show file', 'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}}]\n")
+            (insert "else:\n")
+            (insert "    value = {}\n")
+            (insert "payload = json.dumps(value, separators=(',', ':')).encode('utf-8')\n")
+            (insert "print(json.dumps(base64.b64encode(payload).decode('ascii')))\n"))
           (set-file-modes mock-emacsclient #o755)
           (with-current-buffer input-buffer
             (let ((json-object-type 'alist)
@@ -241,7 +248,12 @@ Return (EXIT-CODE . OUTPUT)."
             (insert "import sys\n")
             (insert "expr = sys.argv[-1]\n")
             (insert "response = []\n")
-            (insert "if 'emacs_show_file_buffer' in expr:\n")
+            (insert "names = ['emacs_get_all_buffers', 'emacs_get_buffer_info', 'emacs_get_buffer_text', 'emacs_get_buffer_diagnostics', 'emacs_get_current_context', 'emacs_get_buffer_slice', 'emacs_get_region_text', 'emacs_search_buffers', 'emacs_get_symbol_at_point', 'emacs_describe_symbol', 'emacs_get_messages', 'emacs_get_minibuffer_state', 'emacs_get_all_windows', 'emacs_ensure_file_buffer_open', 'emacs_show_file_buffer', 'emacs_kill_file_buffer', 'emacs_lisp_check_parens']\n")
+            (insert "if 'json-tool-catalog' in expr:\n")
+            (insert "    response = [{'name': name, 'description': name, 'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}} for name in names]\n")
+            (insert "    search = next(item for item in response if item['name'] == 'emacs_search_buffers')\n")
+            (insert "    search['inputSchema'] = {'type': 'object', 'properties': {'pattern': {'type': 'string'}, 'buffers': {'type': 'array', 'items': {'type': 'string'}, 'minItems': 1}}, 'required': ['pattern', 'buffers'], 'additionalProperties': False}\n")
+            (insert "elif 'emacs_show_file_buffer' in expr:\n")
             (insert "    response = {'tool': 'emacs_show_file_buffer', 'params': {'path': '/tmp/example.el', 'line': 9, 'column': 2}}\n")
             (insert "elif 'emacs_get_all_buffers' in expr:\n")
             (insert "    response = {'files': [{'buffer': 'example.el', 'file': '/tmp/example.el'}]}\n")
@@ -482,7 +494,12 @@ Return (EXIT-CODE . OUTPUT)."
             (insert "#!/usr/bin/env python3\n")
             (insert "import base64\n")
             (insert "import json\n")
-            (insert "payload = json.dumps({'buffer': 'example.el', 'text': 'alpha\\u000bbeta\\n└'}, separators=(',', ':'), ensure_ascii=False).encode('utf-8')\n")
+            (insert "import sys\n")
+            (insert "if 'json-tool-catalog' in sys.argv[-1]:\n")
+            (insert "    value = [{'name': 'emacs_get_buffer_text', 'description': 'Buffer text', 'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}}]\n")
+            (insert "else:\n")
+            (insert "    value = {'buffer': 'example.el', 'text': 'alpha\\u000bbeta\\n└'}\n")
+            (insert "payload = json.dumps(value, separators=(',', ':'), ensure_ascii=False).encode('utf-8')\n")
             (insert "print(json.dumps(base64.b64encode(payload).decode('ascii')))\n"))
           (set-file-modes mock-emacsclient #o755)
           (with-current-buffer input-buffer
@@ -538,6 +555,83 @@ Return (EXIT-CODE . OUTPUT)."
         (delete-file mock-emacsclient))
       (kill-buffer input-buffer)
       (kill-buffer output-buffer))))
+
+(ert-deftest codex-ide-mcp-script-caches-catalog-once-per-process ()
+  (let ((mock-emacsclient (make-temp-file "codex-ide-emacsclient-" nil ".py"))
+        (count-file (make-temp-file "codex-ide-catalog-count-")))
+    (unwind-protect
+        (progn
+          (with-temp-file count-file (insert "0"))
+          (with-temp-file mock-emacsclient
+            (insert "#!/usr/bin/env python3\n")
+            (insert "import base64, json, sys\n")
+            (insert (format "count_path = %S\n" count-file))
+            (insert "expr = sys.argv[-1]\n")
+            (insert "if 'json-tool-catalog' in expr:\n")
+            (insert "    with open(count_path, encoding='utf-8') as handle: count = int(handle.read())\n")
+            (insert "    with open(count_path, 'w', encoding='utf-8') as handle: handle.write(str(count + 1))\n")
+            (insert "    value = [{'name': 'emacs_get_all_buffers', 'description': 'Buffers', 'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}}]\n")
+            (insert "else:\n")
+            (insert "    value = {'files': []}\n")
+            (insert "payload = json.dumps(value, separators=(',', ':')).encode('utf-8')\n")
+            (insert "print(json.dumps(base64.b64encode(payload).decode('ascii')))\n"))
+          (set-file-modes mock-emacsclient #o755)
+          (let ((result
+                 (codex-ide-mcp-test--run-script
+                  (concat
+                   "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}\n"
+                   "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n"
+                   "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"emacs_get_all_buffers\",\"arguments\":{}}}\n")
+                  "--emacsclient" mock-emacsclient)))
+            (should (= (car result) 0))
+            (should (= (length (split-string (cdr result) "\n" t)) 3)))
+          (with-temp-buffer
+            (insert-file-contents count-file)
+            (should (equal (buffer-string) "1"))))
+      (when (file-exists-p mock-emacsclient) (delete-file mock-emacsclient))
+      (when (file-exists-p count-file) (delete-file count-file)))))
+
+(ert-deftest codex-ide-mcp-script-rejects-internal-or-malformed-catalogs ()
+  (let ((mock-emacsclient (make-temp-file "codex-ide-emacsclient-" nil ".py"))
+        (expression-log (make-temp-file "codex-ide-expression-log-")))
+    (unwind-protect
+        (progn
+          (with-temp-file mock-emacsclient
+            (insert "#!/usr/bin/env python3\n")
+            (insert "import base64, json, sys\n")
+            (insert (format "with open(%S, 'a', encoding='utf-8') as handle: handle.write(sys.argv[-1] + '\\n')\n"
+                            expression-log))
+            (insert "value = [{'name': 'emacs_get_all_buffers', 'description': 'Buffers', 'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}, 'handler': 'private'}]\n")
+            (insert "payload = json.dumps(value, separators=(',', ':')).encode('utf-8')\n")
+            (insert "print(json.dumps(base64.b64encode(payload).decode('ascii')))\n"))
+          (set-file-modes mock-emacsclient #o755)
+          (let* ((result
+                  (codex-ide-mcp-test--run-script
+                   (concat
+                    "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}\n"
+                    "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"emacs_get_all_buffers\",\"arguments\":{}}}\n")
+                   "--emacsclient" mock-emacsclient))
+                 (responses (mapcar
+                             #'codex-ide-mcp-test--read-response
+                             (split-string (cdr result) "\n" t))))
+            (should (= (car result) 0))
+            (dolist (response responses)
+              (let ((tool-result
+                     (alist-get "result" response nil nil #'equal)))
+                (should (alist-get "isError" tool-result nil nil #'equal))
+                (should
+                 (string-match-p
+                  "invalid bridge catalog"
+                  (alist-get
+                   "text"
+                   (car (alist-get "content" tool-result nil nil #'equal))
+                   nil nil #'equal))))))
+          (with-temp-buffer
+            (insert-file-contents expression-log)
+            (should-not (string-match-p "json-tool-call"
+                                        (buffer-string)))))
+      (when (file-exists-p mock-emacsclient) (delete-file mock-emacsclient))
+      (when (file-exists-p expression-log) (delete-file expression-log)))))
 
 (provide 'codex-ide-mcp-tests)
 
