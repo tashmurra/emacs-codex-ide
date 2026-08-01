@@ -35,6 +35,7 @@
 (defvar codex-ide-fast)
 (defvar codex-ide-reasoning-effort)
 (defvar codex-ide-approval-policy)
+(defvar codex-ide-approvals-reviewer)
 (defvar codex-ide-sandbox-mode)
 (defvar codex-ide-personality)
 
@@ -65,6 +66,13 @@
      :global-var codex-ide-approval-policy
      :applies-to-live-session t
      :protocol-key approvalPolicy)
+    (approvals-reviewer
+     :label "approvals reviewer"
+     :prompt "Approvals reviewer"
+     :choices ("inherit" "user" "auto_review")
+     :global-var codex-ide-approvals-reviewer
+     :applies-to-live-session t
+     :protocol-key approvalsReviewer)
     (sandbox-mode
      :label "sandbox mode"
      :prompt "Sandbox mode"
@@ -199,6 +207,13 @@ keys are left unchanged when applying the preset.")
 (defun codex-ide-config-applies-to-live-session-p (key)
   "Return non-nil when config KEY affects future turns in a live session."
   (plist-get (codex-ide-config--descriptor key) :applies-to-live-session))
+
+(defun codex-ide-config-effective-approvals-reviewer (&optional session)
+  "Return SESSION's explicit approvals reviewer, or nil when inherited."
+  (let ((reviewer
+         (codex-ide-config-effective-value 'approvals-reviewer session)))
+    (unless (equal reviewer "inherit")
+      reviewer)))
 
 (defun codex-ide-config--protocol-key (key)
   "Return the protocol payload symbol for config KEY."

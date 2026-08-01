@@ -52,6 +52,7 @@
 (defvar codex-ide-reasoning-effort)
 (defvar codex-ide-running-submit-action)
 (defvar codex-ide-approval-policy)
+(defvar codex-ide-approvals-reviewer)
 (defvar codex-ide-sandbox-mode)
 (defvar codex-ide-personality)
 (defvar codex-ide-new-session-split)
@@ -300,6 +301,18 @@
 			  (or value
 			      (codex-ide-config-read-value 'approval-policy))))
 
+(transient-define-suffix codex-ide--set-approvals-reviewer (&optional value)
+			 "Set `codex-ide-approvals-reviewer'."
+			 :description (lambda ()
+					(codex-ide--config-menu-agent-value-label
+					 'approvals-reviewer))
+			 :transient t
+			 (interactive)
+			 (codex-ide--config-menu-apply-agent-setting
+			  'approvals-reviewer
+			  (or value
+			      (codex-ide-config-read-value 'approvals-reviewer))))
+
 (transient-define-suffix codex-ide--set-sandbox-mode (&optional value)
 			 "Set `codex-ide-sandbox-mode'."
 			 :description (lambda ()
@@ -449,6 +462,8 @@
   (customize-save-variable 'codex-ide-running-submit-action
                            codex-ide-running-submit-action)
   (customize-save-variable 'codex-ide-approval-policy codex-ide-approval-policy)
+  (customize-save-variable 'codex-ide-approvals-reviewer
+                           codex-ide-approvals-reviewer)
   (customize-save-variable 'codex-ide-sandbox-mode codex-ide-sandbox-mode)
   (customize-save-variable 'codex-ide-personality codex-ide-personality)
   (customize-save-variable 'codex-ide-new-session-split
@@ -497,6 +512,7 @@
 			   ("f" codex-ide--set-fast)
 			   ("r" codex-ide--set-reasoning-effort)
 			   ("a" codex-ide--set-approval-policy)
+			   ("v" codex-ide--set-approvals-reviewer)
 			   ("s" codex-ide--set-sandbox-mode)
 			   ("p" codex-ide--set-personality)]
 			  ["Presets"

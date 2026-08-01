@@ -92,6 +92,13 @@ When nil, inline diffs never start folded.")
 (defvar codex-ide-approval-policy "on-request"
 "Approval policy for new or resumed Codex threads and later turns.")
 (custom-autoload 'codex-ide-approval-policy "codex-ide" t)
+(defvar codex-ide-approvals-reviewer "inherit"
+"Reviewer for approvals on new or resumed Codex threads and later turns.
+When set to \"inherit\", omit the app-server override and honor the Codex CLI
+or global configuration.  \"user\" presents approvals to the user, while
+\"auto_review\" lets Codex review them automatically.  `guardian_subagent'
+remains a legacy Codex CLI/config alias and is intentionally not a UI choice.")
+(custom-autoload 'codex-ide-approvals-reviewer "codex-ide" t)
 (defvar codex-ide-sandbox-mode "workspace-write"
 "Sandbox mode for new or resumed Codex threads and later turns.")
 (custom-autoload 'codex-ide-sandbox-mode "codex-ide" t)

@@ -69,6 +69,7 @@
                   "codex-ide-session-mode" (&optional session))
 (declare-function codex-ide-config-effective-value "codex-ide-config" (key &optional session))
 (declare-function codex-ide-config-effective-reasoning-effort "codex-ide-config" (&optional session))
+(declare-function codex-ide-config-effective-approvals-reviewer "codex-ide-config" (&optional session))
 (declare-function codex-ide-log-message "codex-ide-log" (session format-string &rest args))
 
 (defvar codex-ide-log-max-lines)
@@ -6818,6 +6819,9 @@ compatibility with older app-server payloads and global notifications."
     ,@(when-let* ((approval-policy
                    (codex-ide-config-effective-value 'approval-policy session)))
         `((approvalPolicy . ,approval-policy)))
+    ,@(when-let* ((reviewer
+                   (codex-ide-config-effective-approvals-reviewer session)))
+        `((approvalsReviewer . ,reviewer)))
     ,@(when-let* ((sandbox-policy
                    (codex-ide--turn-start-sandbox-policy session)))
         `((sandboxPolicy . ,sandbox-policy)))
@@ -6839,6 +6843,7 @@ compatibility with older app-server payloads and global notifications."
                   (when-let* ((value (alist-get key params)))
                     (cons key value)))
                 '(approvalPolicy
+                  approvalsReviewer
                   sandboxPolicy
                   model
                   serviceTier
@@ -6889,6 +6894,11 @@ compatibility with older app-server payloads and global notifications."
                        payload
                        'approvalPolicy)))
            (cons 'approvalPolicy approval-policy))
+         (when-let* ((reviewer
+                      (codex-ide--nested-reported-config-value
+                       payload
+                       'approvalsReviewer)))
+           (cons 'approvalsReviewer reviewer))
          (when-let* ((sandbox-policy
                       (codex-ide--nested-reported-config-value
                        payload
