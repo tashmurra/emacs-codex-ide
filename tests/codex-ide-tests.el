@@ -9913,6 +9913,198 @@
                       (ensure-list
                        (get-text-property (1- (point)) 'face))))))))
 
+(ert-deftest codex-ide-turn-plan-updated-renders-and-replaces-in-place ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :current-turn-id "turn-plan-1"
+                    :output-prefix-inserted t
+                    :status "running"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (insert "Before plan\n")
+      (codex-ide--handle-notification
+       session
+       '((method . "turn/plan/updated")
+         (params . ((turnId . "turn-plan-1")
+                    (explanation . "Initial approach")
+                    (plan . (((step . "Inspect") (status . "inProgress"))
+                             ((step . "Test") (status . "pending"))))))))
+      (let* ((first-state (codex-ide--plan-update-state session))
+             (first-start (plist-get first-state :start-marker)))
+        (should first-state)
+        (should (string-match-p "Initial approach" (buffer-string)))
+        (should (string-match-p "Inspect" (buffer-string)))
+        (codex-ide--append-agent-text (current-buffer) "After plan\n")
+        (codex-ide--handle-notification
+         session
+         '((method . "turn/plan/updated")
+           (params . ((turnId . "turn-plan-1")
+                      (explanation . "Revised approach")
+                      (plan . (((step . "Inspect") (status . "completed"))
+                               ((step . "Implement") (status . "inProgress"))))))))
+        (let ((second-state (codex-ide--plan-update-state session)))
+          (should (eq first-start (plist-get second-state :start-marker)))
+          (should-not (string-match-p "Initial approach" (buffer-string)))
+          (should-not (string-match-p "Test" (buffer-string)))
+          (should (string-match-p "Revised approach" (buffer-string)))
+          (should (string-match-p "Implement" (buffer-string)))
+          (should (string-match-p "After plan" (buffer-string)))
+          (save-excursion
+            (goto-char (point-min))
+            (should (= (how-many (regexp-quote "* Updated plan")
+                                 (point-min) (point-max))
+                       1)))
+          (let ((rendered (buffer-string)))
+            (codex-ide--handle-notification
+             session
+             '((method . "turn/plan/updated")
+               (params . ((turnId . "turn-plan-1")
+                          (explanation . "Revised approach")
+                          (plan . (((step . "Inspect") (status . "completed"))
+                                   ((step . "Implement")
+                                    (status . "inProgress"))))))))
+            (should (equal rendered (buffer-string)))
+            (codex-ide--handle-notification
+             session
+             '((method . "turn/plan/updated")
+               (params . ((turnId . "turn-plan-1") (plan . [])))))
+            (should (equal rendered (buffer-string)))))))))
+
+(ert-deftest codex-ide-turn-plan-updated-rejects-stale-and-malformed-updates ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :current-turn-id "turn-current"
+                    :output-prefix-inserted t
+                    :status "running"
+                    :item-states (make-hash-table :test 'equal)))
+          logs)
+      (setq-local codex-ide--session session)
+      (cl-letf (((symbol-function 'codex-ide-log-message)
+                 (lambda (_session format-string &rest args)
+                   (push (apply #'format format-string args) logs))))
+        (codex-ide--handle-notification
+         session
+         '((method . "turn/plan/updated")
+           (params . ((turnId . "turn-stale")
+                      (plan . (((step . "Stale") (status . "pending"))))))))
+        (codex-ide--handle-notification
+         session
+         '((method . "turn/plan/updated")
+           (params . ((turnId . "turn-current") (plan . [])))))
+        (should-not (codex-ide--plan-update-state session))
+        (should-not (string-match-p "Updated plan" (buffer-string)))
+        (should (seq-some (lambda (entry)
+                            (string-match-p "Ignoring plan update for turn" entry))
+                          logs))
+        (should (seq-some (lambda (entry)
+                            (string-match-p "malformed or empty" entry))
+                          logs))))))
+
+(ert-deftest codex-ide-turn-plan-updated-accepts-missing-turn-id-and-stays-visible ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (codex-ide-session-transcript-set-detail-level 'compact)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :current-turn-id "turn-current"
+                    :output-prefix-inserted t
+                    :status "running"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--handle-notification
+       session
+       '((method . "turn/plan/updated")
+         (params . ((plan . (((step . "Visible step")
+                              (status . "inProgress"))))))))
+      (goto-char (point-min))
+      (search-forward "Updated plan")
+      (should-not (invisible-p (match-beginning 0)))
+      (search-forward "Visible step")
+      (should-not (invisible-p (match-beginning 0)))
+      (should (equal (plist-get (codex-ide--plan-update-state session) :turn-id)
+                     "turn-current")))))
+
+(ert-deftest codex-ide-turn-plan-updated-preserves-active-input-point ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (setf (codex-ide-session-current-turn-id session) "turn-plan-point")
+      (codex-ide--replace-current-input session "steer me")
+      (goto-char (+ (marker-position (codex-ide-session-input-start-marker session))
+                    3))
+      (let ((input-offset
+             (- (point)
+                (marker-position (codex-ide-session-input-start-marker session)))))
+        (codex-ide--handle-notification
+         session
+         '((method . "turn/plan/updated")
+           (params . ((turnId . "turn-plan-point")
+                      (plan . (((step . "First")
+                                (status . "inProgress"))))))))
+        (codex-ide--handle-notification
+         session
+         '((method . "turn/plan/updated")
+           (params . ((turnId . "turn-plan-point")
+                      (plan . (((step . "First") (status . "completed"))
+                               ((step . "Second")
+                                (status . "inProgress"))))))))
+        (should (equal (codex-ide--current-input session) "steer me"))
+        (should (= (- (point)
+                      (marker-position
+                       (codex-ide-session-input-start-marker session)))
+                   input-offset))))))
+
+(ert-deftest codex-ide-turn-plan-completion-retains-final-plan-and-clears-state ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :current-turn-id "turn-plan-1"
+                    :output-prefix-inserted t
+                    :status "running"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--handle-notification
+       session
+       '((method . "turn/plan/updated")
+         (params . ((turnId . "turn-plan-1")
+                    (plan . (((step . "First final step")
+                              (status . "completed"))))))))
+      (let* ((state (codex-ide--plan-update-state session))
+             (start-marker (plist-get state :start-marker))
+             (end-marker (plist-get state :end-marker)))
+        (codex-ide--finish-turn session)
+        (should-not (codex-ide--plan-update-state session))
+        (should-not (marker-buffer start-marker))
+        (should-not (marker-buffer end-marker))
+        (should (string-match-p "First final step" (buffer-string)))
+        (setf (codex-ide-session-current-turn-id session) "turn-plan-2"
+              (codex-ide-session-output-prefix-inserted session) t
+              (codex-ide-session-status session) "running")
+        (codex-ide--handle-notification
+         session
+         '((method . "turn/plan/updated")
+           (params . ((turnId . "turn-plan-2")
+                      (plan . (((step . "Second turn step")
+                                (status . "pending"))))))))
+        (should (string-match-p "First final step" (buffer-string)))
+        (should (string-match-p "Second turn step" (buffer-string)))
+        (save-excursion
+          (goto-char (point-min))
+          (should (= (how-many (regexp-quote "* Updated plan")
+                               (point-min) (point-max))
+                     2)))))))
+
 (provide 'codex-ide-tests)
 
 ;;; codex-ide-tests.el ends here
