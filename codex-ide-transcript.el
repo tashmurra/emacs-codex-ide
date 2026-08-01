@@ -51,6 +51,7 @@
 (require 'codex-ide-errors)
 (require 'codex-ide-mcp-elicitation)
 (require 'codex-ide-nav)
+(require 'codex-ide-plan)
 (require 'codex-ide-renderer)
 (require 'codex-ide-slash-command)
 (require 'codex-ide-thread-history)
@@ -4595,6 +4596,118 @@ When COMPLETION is non-nil, render completion-specific state details."
          (format "* Plan: %s\n" delta)
          'font-lock-doc-face)))))
 
+(defconst codex-ide--plan-update-state-key :plan-update-state
+  "Session metadata key used for the active structured plan update.")
+
+(defun codex-ide--plan-update-state (session)
+  "Return SESSION's active structured plan update state."
+  (codex-ide--session-metadata-get session codex-ide--plan-update-state-key))
+
+(defun codex-ide--clear-plan-update-state (session)
+  "Detach markers and clear SESSION's structured plan update state."
+  (when-let* ((state (codex-ide--plan-update-state session)))
+    (dolist (marker (list (plist-get state :start-marker)
+                          (plist-get state :end-marker)))
+      (when (markerp marker)
+        (set-marker marker nil))))
+  (codex-ide--session-metadata-put
+   session codex-ide--plan-update-state-key nil))
+
+(defun codex-ide--plan-update-markers-live-p (state buffer)
+  "Return non-nil when plan update STATE markers are live in BUFFER."
+  (and (codex-ide--marker-live-in-buffer-p
+        (plist-get state :start-marker) buffer)
+       (codex-ide--marker-live-in-buffer-p
+        (plist-get state :end-marker) buffer)))
+
+(defun codex-ide--render-plan-update-region
+    (session text start-marker end-marker)
+  "Render SESSION plan TEXT between START-MARKER and END-MARKER."
+  (let ((buffer (codex-ide-session-buffer session)))
+    (with-current-buffer buffer
+      (let* ((active-boundary (codex-ide--active-input-boundary-marker buffer))
+             (restore-point (codex-ide--input-point-marker session))
+             (moving (= (point) (point-max)))
+             (start (marker-position start-marker)))
+        (codex-ide--with-transcript-render-transaction-at
+         (session buffer start)
+         (codex-ide--maybe-save-transcript-position
+          start
+          (codex-ide--without-undo-recording
+           (let ((inhibit-read-only t))
+             (delete-region start (marker-position end-marker))
+             (goto-char start)
+             (insert text)
+             (add-text-properties start (point)
+                                  (codex-ide--current-agent-text-properties))
+             (codex-ide--freeze-region start (point))
+             (set-marker end-marker (point))
+             (when (and active-boundary
+                        (= (marker-position active-boundary) start))
+               (set-marker active-boundary (point)))
+             (codex-ide--transcript-render-context-note-position
+              (if (and active-boundary (marker-buffer active-boundary))
+                  (marker-position active-boundary)
+                (marker-position end-marker)))
+             (if restore-point
+                 (codex-ide--restore-input-point-marker restore-point)
+               (when moving
+                 (goto-char (point-max))))))))))))
+
+(defun codex-ide--render-plan-update (&optional session params)
+  "Render structured plan update PARAMS for SESSION."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (let* ((current-turn-id (codex-ide-session-current-turn-id session))
+         (notification-turn-id
+          (and (listp params) (alist-get 'turnId params)))
+         (update (codex-ide-plan-normalize-update params))
+         (effective-turn-id (or notification-turn-id current-turn-id))
+         (buffer (codex-ide-session-buffer session)))
+    (cond
+     ((not current-turn-id)
+      (codex-ide-log-message session "Ignoring plan update without an active turn"))
+     ((and notification-turn-id
+           (not (equal notification-turn-id current-turn-id)))
+      (codex-ide-log-message
+       session
+       "Ignoring plan update for turn %s (active turn %s)"
+       notification-turn-id current-turn-id))
+     ((not update)
+      (codex-ide-log-message session "Ignoring malformed or empty plan update"))
+     (t
+      (let* ((signature (codex-ide-plan-update-signature update))
+             (existing (codex-ide--plan-update-state session)))
+        (unless (and (equal (plist-get existing :turn-id) effective-turn-id)
+                     (equal (plist-get existing :signature) signature))
+          (let ((codex-ide--current-agent-item-type "plan")
+                start-marker
+                end-marker)
+            (unless (codex-ide-session-output-prefix-inserted session)
+              (codex-ide--begin-turn-display session))
+            (codex-ide--clear-pending-output-indicator session)
+            (if (and (equal (plist-get existing :turn-id) effective-turn-id)
+                     (codex-ide--plan-update-markers-live-p existing buffer))
+                (setq start-marker (plist-get existing :start-marker)
+                      end-marker (plist-get existing :end-marker))
+              (codex-ide--clear-plan-update-state session)
+              (codex-ide--ensure-output-spacing buffer)
+              (with-current-buffer buffer
+                (let ((position (codex-ide--transcript-insertion-position buffer)))
+                  (setq start-marker (copy-marker position)
+                        end-marker (copy-marker position)))))
+            (codex-ide--render-plan-update-region
+             session
+             (codex-ide-plan-format-update update)
+             start-marker
+             end-marker)
+            (codex-ide--session-metadata-put
+             session
+             codex-ide--plan-update-state-key
+             (list :turn-id effective-turn-id
+                   :signature signature
+                   :start-marker start-marker
+                   :end-marker end-marker)))))))))
+
 (defun codex-ide--reasoning-summary-entry (state summary-index)
   "Return reasoning summary entry from STATE for SUMMARY-INDEX."
   (alist-get summary-index (plist-get state :reasoning-summaries) nil nil #'equal))
@@ -4986,6 +5099,7 @@ Return non-nil when BUFFER is a Codex transcript and the reveal was handled."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
   (unless session
     (error "No Codex session available"))
+  (codex-ide--clear-plan-update-state session)
   (setf (codex-ide-session-current-turn-id session) nil
         (codex-ide-session-current-message-item-id session) nil
         (codex-ide-session-current-message-prefix-inserted session) nil
@@ -5020,6 +5134,7 @@ When CLOSING-NOTE is non-nil, append it before restoring the prompt."
     (when active-prompt
       (codex-ide--ensure-active-input-prompt-spacing session))
     (codex-ide-usage-append-transcript-notification session)
+    (codex-ide--clear-plan-update-state session)
     (setf (codex-ide-session-current-turn-id session) nil
           (codex-ide-session-current-message-item-id session) nil
           (codex-ide-session-current-message-prefix-inserted session) nil
@@ -5434,6 +5549,7 @@ Signal an error when THREAD-READ lacks replayable transcript items."
     (with-current-buffer buffer
       (setq-local default-directory working-dir)
       (setq-local codex-ide--session session)
+      (codex-ide--clear-plan-update-state session)
       (codex-ide--delete-input-overlay session)
       (codex-ide--delete-session-local-image-temp-files session)
       (codex-ide--clear-pending-local-images session)
@@ -6437,6 +6553,7 @@ compatibility with older app-server payloads and global notifications."
           "Skills changed; refreshing skill completion cache")
          (codex-ide-mention-refresh-skill-cache-after-change session))
 	("turn/started"
+	 (codex-ide--clear-plan-update-state session)
 	 (codex-ide--remember-reasoning-effort session params)
 	 (codex-ide--remember-or-request-model-name session params)
 	 (codex-ide--check-reported-turn-config
@@ -6469,6 +6586,8 @@ compatibility with older app-server payloads and global notifications."
 	 (codex-ide--update-header-line session)
 	 (unless (codex-ide-session-output-prefix-inserted session)
            (codex-ide--begin-turn-display session)))
+	("turn/plan/updated"
+	 (codex-ide--render-plan-update session params))
 	("item/started"
 	 (when-let* ((item (alist-get 'item params)))
            (when (codex-ide--item-reports-turn-config-p item)
@@ -7484,6 +7603,10 @@ When FACE is non-nil, use it for the inserted line."
 (defun codex-ide-transcript-render-plan-delta (&optional session params)
   "Render a plan delta PARAMS for SESSION."
   (codex-ide--render-plan-delta session params))
+
+(defun codex-ide-transcript-render-plan-update (&optional session params)
+  "Render a structured plan update PARAMS for SESSION."
+  (codex-ide--render-plan-update session params))
 
 (defun codex-ide-transcript-render-reasoning-delta (&optional session params)
   "Render a reasoning summary delta PARAMS for SESSION."
