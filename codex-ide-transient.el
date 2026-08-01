@@ -30,6 +30,8 @@
 (declare-function codex-ide-config-read-history-entry "codex-ide-config" ())
 (declare-function codex-ide-config-read-preset "codex-ide-config" ())
 (declare-function codex-ide-config-apply-preset "codex-ide-config" (preset scope &optional session))
+(declare-function codex-ide-config-apply-preset-with-result
+                  "codex-ide-config" (preset scope &optional session))
 (declare-function codex-ide-config-begin-history-group "codex-ide-config" (&optional session interaction-id))
 (declare-function codex-ide-config-commit-history-group "codex-ide-config" ())
 (declare-function codex-ide-config-restore-history-entry "codex-ide-config" (entry))
@@ -192,11 +194,24 @@
 			 (interactive)
 			 (let* ((preset (or preset (codex-ide-config-read-preset)))
 				(scope (codex-ide--config-menu-scope))
-				(count (codex-ide-config-apply-preset
-					preset
-					scope
-					(codex-ide--session-for-current-buffer))))
-			   (message "Applied Codex config preset %s to %s."
+				(result (codex-ide-config-apply-preset-with-result
+					 preset
+					 scope
+					 (codex-ide--session-for-current-buffer)))
+				(count (plist-get result :count))
+				(note
+				 (pcase (plist-get result :model-status)
+				   ('upgraded
+				    (format " Model upgraded: %s."
+					    (string-join
+					     (plist-get result :upgrade-path)
+					     " -> ")))
+				   ('unvalidated
+				    (format
+				     " Model %s applied without catalog validation."
+				     (plist-get result :requested-model)))
+				   (_ ""))))
+			   (message "Applied Codex config preset %s to %s.%s"
 				    (car preset)
 				    (pcase scope
 				      ('this-session "this session")
@@ -205,7 +220,8 @@
 					       count
 					       (if (= count 1) "" "s")))
 				      ('future-sessions "future sessions")
-				      (_ "the selected scope")))))
+				      (_ "the selected scope"))
+				    note)))
 
 ;;;###autoload
 (defun codex-ide-apply-config-preset ()

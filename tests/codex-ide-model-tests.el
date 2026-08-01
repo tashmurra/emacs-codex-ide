@@ -10,6 +10,19 @@
 (require 'cl-lib)
 (require 'codex-ide)
 
+(ert-deftest codex-ide-model-entry-upgrade-name-normalizes-metadata ()
+  (should-not (codex-ide--model-entry-upgrade-name
+               '((model . "gpt-current") (upgrade . nil))))
+  (should (equal (codex-ide--model-entry-upgrade-name
+                  '((model . "gpt-old") (upgrade . "gpt-current")))
+                 "gpt-current"))
+  (should-error
+   (codex-ide--model-entry-upgrade-name
+    '((model . "gpt-old") (upgrade . ""))))
+  (should-error
+   (codex-ide--model-entry-upgrade-name
+    '((model . "gpt-old") (upgrade . 42)))))
+
 (ert-deftest codex-ide-reasoning-effort-options-use-model-list-metadata ()
   (cl-letf (((symbol-function 'codex-ide--available-models)
              (lambda (&optional _session)

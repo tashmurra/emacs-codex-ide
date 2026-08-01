@@ -11,6 +11,18 @@
 (require 'codex-ide)
 (require 'codex-ide-test-fixtures)
 
+(defun codex-ide-config-test--model-entry
+    (name &optional upgrade efforts default-effort)
+  "Return model metadata for NAME with optional UPGRADE and EFFORTS."
+  (let ((efforts (or efforts '("medium"))))
+    `((model . ,name)
+      (upgrade . ,upgrade)
+      (supportedReasoningEfforts
+       . ,(mapcar (lambda (effort)
+                    `((reasoningEffort . ,effort)))
+                  efforts))
+      (defaultReasoningEffort . ,(or default-effort (car efforts))))))
+
 (ert-deftest codex-ide-config-effective-value-prefers-session-overrides ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (codex-ide-sandbox-mode "workspace-write"))
@@ -193,6 +205,156 @@
 				    (should (equal (codex-ide-config-effective-value
 						    'approval-policy session)
 						   "on-request")))))))
+
+(ert-deftest codex-ide-config-resolve-preset-keeps-current-model ()
+  (let ((models
+         (list (codex-ide-config-test--model-entry
+                "gpt-current" nil '("low" "medium") "medium"))))
+    (cl-letf (((symbol-function 'codex-ide--available-models)
+               (lambda (&optional _session) models)))
+      (let ((result
+             (codex-ide-config-resolve-preset
+              '("Current" . (model "gpt-current"
+				   reasoning-effort "low")))))
+        (should (eq (plist-get result :model-status) 'unchanged))
+        (should (equal (plist-get result :requested-model) "gpt-current"))
+        (should (equal (plist-get result :resolved-model) "gpt-current"))
+        (should (equal (plist-get result :upgrade-path) '("gpt-current")))
+        (should (equal (plist-get (plist-get result :values) 'model)
+                       "gpt-current"))))))
+
+(ert-deftest codex-ide-config-resolve-preset-follows-upgrade-chains ()
+  (dolist
+      (case
+       `((,(list (codex-ide-config-test--model-entry
+                  "gpt-old" "gpt-new" '("medium"))
+                 (codex-ide-config-test--model-entry
+                  "gpt-new" nil '("medium")))
+          ("gpt-old" "gpt-new"))
+         (,(list (codex-ide-config-test--model-entry
+                  "gpt-old" "gpt-middle" '("medium"))
+                 (codex-ide-config-test--model-entry
+                  "gpt-middle" "gpt-new" '("medium"))
+                 (codex-ide-config-test--model-entry
+                  "gpt-new" nil '("medium")))
+          ("gpt-old" "gpt-middle" "gpt-new"))))
+    (let ((models (car case))
+          (expected-path (cadr case)))
+      (cl-letf (((symbol-function 'codex-ide--available-models)
+                 (lambda (&optional _session) models)))
+        (let ((result
+               (codex-ide-config-resolve-preset
+                '("Upgrade" . (model "gpt-old"
+				     reasoning-effort "medium")))))
+          (should (eq (plist-get result :model-status) 'upgraded))
+          (should (equal (plist-get result :upgrade-path) expected-path))
+          (should (equal (plist-get result :resolved-model) "gpt-new"))
+          (should (equal (plist-get (plist-get result :values) 'model)
+                         "gpt-new")))))))
+
+(ert-deftest codex-ide-config-resolve-preset-rejects-invalid-upgrades ()
+  (dolist
+      (models
+       (list
+        (list (codex-ide-config-test--model-entry
+               "gpt-other" nil '("medium")))
+        (list (codex-ide-config-test--model-entry
+               "gpt-old" "gpt-missing" '("medium")))
+        (list (codex-ide-config-test--model-entry
+               "gpt-old" "gpt-middle" '("medium"))
+              (codex-ide-config-test--model-entry
+               "gpt-middle" "gpt-old" '("medium")))
+        (list `((model . "gpt-old")
+                (upgrade . 42)
+                (supportedReasoningEfforts
+                 . (((reasoningEffort . "medium"))))
+                (defaultReasoningEffort . "medium")))))
+    (cl-letf (((symbol-function 'codex-ide--available-models)
+               (lambda (&optional _session) models)))
+      (should-error
+       (codex-ide-config-resolve-preset
+        '("Invalid" . (model "gpt-old" reasoning-effort "medium")))
+       :type 'user-error))))
+
+(ert-deftest codex-ide-config-preset-validation-fails-atomically ()
+  (let ((codex-ide-config-history nil)
+        (codex-ide-model "gpt-before")
+        (codex-ide-reasoning-effort "low")
+        (models
+         (list (codex-ide-config-test--model-entry
+                "gpt-current" nil '("low" "medium") "medium"))))
+    (cl-letf (((symbol-function 'codex-ide--available-models)
+               (lambda (&optional _session) models)))
+      (should-error
+       (codex-ide-config-apply-preset
+        '("Invalid" . (model "gpt-current" reasoning-effort "high"))
+        'future-sessions)
+       :type 'user-error))
+    (should (equal codex-ide-model "gpt-before"))
+    (should (equal codex-ide-reasoning-effort "low"))
+    (should-not codex-ide-config-history)))
+
+(ert-deftest codex-ide-config-preset-catalog-failure-preserves-behavior ()
+  (let ((codex-ide-config-history nil)
+        (codex-ide-model "gpt-before")
+        (codex-ide-reasoning-effort "low"))
+    (cl-letf (((symbol-function 'codex-ide--available-models)
+               (lambda (&optional _session) nil)))
+      (let ((result
+             (codex-ide-config-apply-preset-with-result
+              '("Unvalidated" . (model "provider-model"
+                                       reasoning-effort "high"))
+              'future-sessions)))
+        (should (eq (plist-get result :model-status) 'unvalidated))
+        (should (= (plist-get result :count) 0))
+        (should (equal (plist-get result :requested-model) "provider-model"))
+        (should (equal codex-ide-model "provider-model"))
+        (should (equal codex-ide-reasoning-effort "high"))
+        (should (= (length codex-ide-config-history) 1))))))
+
+(ert-deftest codex-ide-config-non-model-preset-skips-model-discovery ()
+  (let ((codex-ide-config-history nil)
+        (codex-ide-sandbox-mode "workspace-write")
+        (discovery-called nil))
+    (cl-letf (((symbol-function 'codex-ide--available-models)
+               (lambda (&optional _session)
+                 (setq discovery-called t)
+                 nil)))
+      (let ((result
+             (codex-ide-config-apply-preset-with-result
+              '("Read-only" . (sandbox-mode "read-only"))
+              'future-sessions)))
+        (should (eq (plist-get result :model-status) 'not-applicable))
+        (should-not discovery-called)
+        (should (equal codex-ide-sandbox-mode "read-only"))))))
+
+(ert-deftest codex-ide-config-upgraded-preset-history-records-resolved-model ()
+  (let ((codex-ide-config-history nil)
+        (codex-ide-model "gpt-before")
+        (codex-ide-reasoning-effort "low")
+        (models
+         (list (codex-ide-config-test--model-entry
+                "gpt-old" "gpt-new" '("high"))
+               (codex-ide-config-test--model-entry
+                "gpt-new" nil '("high")))))
+    (cl-letf (((symbol-function 'codex-ide--available-models)
+               (lambda (&optional _session) models))
+              ((symbol-function 'message) (lambda (&rest _) nil)))
+      (let ((result
+             (codex-ide-config-apply-preset-with-result
+              '("Upgrade" . (model "gpt-old" reasoning-effort "high"))
+              'future-sessions)))
+        (should (eq (plist-get result :model-status) 'upgraded))
+        (should (equal codex-ide-model "gpt-new"))
+        (should (= (length codex-ide-config-history) 1))
+        (should
+         (string-match-p
+          (regexp-quote "model=gpt-new")
+          (codex-ide-config-format-history-entry
+           (car codex-ide-config-history))))
+        (codex-ide-config-restore-last)
+        (should (equal codex-ide-model "gpt-before"))
+        (should (equal codex-ide-reasoning-effort "low"))))))
 
 (ert-deftest codex-ide-config-format-preset-shows-only-explicit-values ()
   (let ((formatted

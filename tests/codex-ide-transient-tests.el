@@ -336,6 +336,46 @@
     (should (equal codex-ide-sandbox-mode "read-only"))
     (should (equal codex-ide-approval-policy "on-request"))))
 
+(ert-deftest codex-ide-apply-config-preset-reports-model-upgrade ()
+  (let ((messages nil)
+        (codex-ide-agent-config-menu-scope 'future-sessions))
+    (cl-letf (((symbol-function 'codex-ide-config-apply-preset-with-result)
+               (lambda (&rest _)
+                 '(:count 0
+			  :model-status upgraded
+			  :requested-model "gpt-old"
+			  :resolved-model "gpt-new"
+			  :upgrade-path ("gpt-old" "gpt-middle" "gpt-new"))))
+              ((symbol-function 'message)
+               (lambda (format-string &rest args)
+                 (push (apply #'format format-string args) messages))))
+      (codex-ide--config-menu-apply-preset
+       '("Upgrade" . (model "gpt-old"))))
+    (should
+     (equal
+      (car messages)
+      "Applied Codex config preset Upgrade to future sessions. Model upgraded: gpt-old -> gpt-middle -> gpt-new."))))
+
+(ert-deftest codex-ide-apply-config-preset-reports-unvalidated-model ()
+  (let ((messages nil)
+        (codex-ide-agent-config-menu-scope 'future-sessions))
+    (cl-letf (((symbol-function 'codex-ide-config-apply-preset-with-result)
+               (lambda (&rest _)
+                 '(:count 0
+			  :model-status unvalidated
+			  :requested-model "provider-model"
+			  :resolved-model "provider-model"
+			  :upgrade-path ("provider-model"))))
+              ((symbol-function 'message)
+               (lambda (format-string &rest args)
+                 (push (apply #'format format-string args) messages))))
+      (codex-ide--config-menu-apply-preset
+       '("Provider" . (model "provider-model"))))
+    (should
+     (equal
+      (car messages)
+      "Applied Codex config preset Provider to future sessions. Model provider-model applied without catalog validation."))))
+
 (ert-deftest codex-ide-agent-config-menu-agent-setting-suffixes-stay-open-after-applying ()
   (let ((codex-ide-model "gpt-5.4")
         (codex-ide-fast "on")
