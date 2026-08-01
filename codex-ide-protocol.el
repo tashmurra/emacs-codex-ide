@@ -564,6 +564,38 @@ SORT-KEY is nil, sort by `updated_at'."
            (not (string-empty-p name))
            name))))
 
+(defun codex-ide--model-entry-upgrade-name (entry)
+  "Return ENTRY's recommended upgrade model name, or nil.
+Signal an error when the app-server provides malformed upgrade metadata."
+  (unless (proper-list-p entry)
+    (error "Malformed model entry: %S" entry))
+  (let ((upgrade (alist-get 'upgrade entry)))
+    (cond
+     ((null upgrade) nil)
+     ((and (stringp upgrade)
+           (not (string-empty-p upgrade)))
+      upgrade)
+     (t
+      (error "Malformed model upgrade target: %S" upgrade)))))
+
+(defun codex-ide--model-entry-reasoning-effort-options (entry)
+  "Return reasoning effort choices and default from model ENTRY.
+Return nil when ENTRY does not contain complete, usable effort metadata."
+  (when-let* (((proper-list-p entry))
+	      (efforts (alist-get 'supportedReasoningEfforts entry))
+	      ((or (proper-list-p efforts) (vectorp efforts)))
+	      ((> (length efforts) 0))
+	      ((seq-every-p #'codex-ide--reasoning-effort-name efforts))
+	      (choices
+	       (delete-dups
+                (mapcar #'codex-ide--reasoning-effort-name
+                        (append efforts nil))))
+	      (default (alist-get 'defaultReasoningEffort entry))
+	      ((and (stringp default)
+                    (not (string-empty-p default))
+                    (member default choices))))
+    (list :choices choices :default default)))
+
 (defun codex-ide--available-model-names (&optional _context session)
   "Return visible model names for SESSION's workspace, or nil on failure."
   (delete-dups
@@ -614,20 +646,8 @@ SORT-KEY is nil, sort by `updated_at'."
   "Return reasoning effort choices and default for MODEL in SESSION.
 Return nil when app-server does not provide usable model metadata."
   (when-let* ((models (codex-ide--available-models session))
-	      (entry (codex-ide--model-entry models model session))
-	      (efforts (alist-get 'supportedReasoningEfforts entry))
-	      ((or (proper-list-p efforts) (vectorp efforts)))
-	      ((> (length efforts) 0))
-	      ((seq-every-p #'codex-ide--reasoning-effort-name efforts))
-	      (choices
-	       (delete-dups
-                (mapcar #'codex-ide--reasoning-effort-name
-                        (append efforts nil))))
-	      (default (alist-get 'defaultReasoningEffort entry))
-	      ((and (stringp default)
-                    (not (string-empty-p default))
-                    (member default choices))))
-    (list :choices choices :default default)))
+	      (entry (codex-ide--model-entry models model session)))
+    (codex-ide--model-entry-reasoning-effort-options entry)))
 
 (defun codex-ide--fast-service-tier (&optional session)
   "Return the app-server service tier implied by SESSION's Fast setting."

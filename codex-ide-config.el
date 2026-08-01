@@ -21,6 +21,12 @@
 (declare-function codex-ide--update-header-line "codex-ide-header" (&optional session))
 (declare-function codex-ide--available-model-names "codex-ide-protocol"
                   (&optional context session))
+(declare-function codex-ide--available-models "codex-ide-protocol"
+                  (&optional session))
+(declare-function codex-ide--model-entry-name "codex-ide-protocol" (entry))
+(declare-function codex-ide--model-entry-upgrade-name "codex-ide-protocol" (entry))
+(declare-function codex-ide--model-entry-reasoning-effort-options
+                  "codex-ide-protocol" (entry))
 (declare-function codex-ide--reasoning-effort-options "codex-ide-protocol"
                   (&optional model session))
 
@@ -110,13 +116,13 @@ Each entry records the global and session-local state overwritten by one config
 apply operation.")
 
 (defvar codex-ide-config-presets
-  '(("Max" . ( model "gpt-5.5"
+  '(("Max" . ( model "gpt-5.6-sol"
                reasoning-effort "xhigh"
                fast "on"))
-    ("Medium" . ( model "gpt-5.4"
+    ("Medium" . ( model "gpt-5.6-terra"
                   reasoning-effort "medium"
                   fast "off"))
-    ("Budget" . ( model "gpt-5.4-mini"
+    ("Budget" . ( model "gpt-5.6-luna"
                   reasoning-effort "low"
                   fast "off"))
     ("Read-only" . ( approval-policy "on-request"
@@ -628,12 +634,129 @@ Return the number of live sessions affected."
       (error "Invalid Codex config preset: %S" preset))
     values))
 
+(defun codex-ide-config--model-entry-by-name (models name)
+  "Return the entry named NAME from app-server MODELS."
+  (seq-find (lambda (entry)
+              (equal (codex-ide--model-entry-name entry) name))
+            models))
+
+(defun codex-ide-config--model-names (models)
+  "Return valid model names from app-server MODELS."
+  (delete-dups
+   (delq nil (mapcar #'codex-ide--model-entry-name models))))
+
+(defun codex-ide-config--unavailable-model-message (model models)
+  "Return an actionable error message for unavailable MODEL in MODELS."
+  (let ((names (codex-ide-config--model-names models)))
+    (format "Preset model %s is unavailable; available models: %s"
+            model
+            (if names
+                (string-join names ", ")
+              "none"))))
+
+(defun codex-ide-config--resolve-model-upgrades (model models)
+  "Resolve MODEL through app-server upgrade metadata in MODELS.
+Return the complete path from MODEL through the final selected model."
+  (let ((current model)
+        (path (list model))
+        (seen (make-hash-table :test #'equal))
+        entry
+        upgrade)
+    (puthash model t seen)
+    (setq entry (codex-ide-config--model-entry-by-name models current))
+    (unless entry
+      (user-error "%s"
+                  (codex-ide-config--unavailable-model-message model models)))
+    (while
+        (setq upgrade
+              (condition-case err
+                  (codex-ide--model-entry-upgrade-name entry)
+                (error
+                 (user-error "Cannot resolve preset model %s: %s"
+                             current
+                             (error-message-string err)))))
+      (when (gethash upgrade seen)
+        (user-error "Model upgrade metadata contains a cycle: %s"
+                    (string-join (append path (list upgrade)) " -> ")))
+      (setq entry (codex-ide-config--model-entry-by-name models upgrade))
+      (unless entry
+        (user-error "Model upgrade target %s from %s is unavailable"
+                    upgrade current))
+      (puthash upgrade t seen)
+      (setq current upgrade
+            path (append path (list upgrade))))
+    path))
+
+(defun codex-ide-config--validate-preset-effort (values entry model)
+  "Validate reasoning effort in VALUES against model ENTRY named MODEL."
+  (when (codex-ide-config--plist-member-p values 'reasoning-effort)
+    (let* ((effort (plist-get values 'reasoning-effort))
+           (options
+            (codex-ide--model-entry-reasoning-effort-options entry))
+           (choices (plist-get options :choices)))
+      (unless options
+        (user-error "Model %s has malformed reasoning effort metadata" model))
+      (unless (member effort choices)
+        (user-error
+         "Reasoning effort %s is unsupported by %s; supported efforts: %s"
+         effort model (string-join choices ", "))))))
+
+(defun codex-ide-config-resolve-preset (preset &optional session)
+  "Resolve and validate PRESET for SESSION without applying it.
+Return a plist containing resolved `:values', `:model-status',
+`:requested-model', `:resolved-model', and `:upgrade-path'."
+  (let* ((values (copy-sequence (codex-ide-config--preset-values preset)))
+         (model-present (codex-ide-config--plist-member-p values 'model))
+         (requested-model (and model-present (plist-get values 'model))))
+    (if (not (and (stringp requested-model)
+                  (not (string-empty-p requested-model))))
+        (list :values values
+              :model-status 'not-applicable
+              :requested-model requested-model
+              :resolved-model requested-model
+              :upgrade-path nil)
+      (let* ((codex-ide--model-list-interaction-cache
+              (if (hash-table-p codex-ide--model-list-interaction-cache)
+                  codex-ide--model-list-interaction-cache
+                (make-hash-table :test #'equal)))
+             (models (codex-ide--available-models session)))
+        (if (null models)
+            (list :values values
+                  :model-status 'unvalidated
+                  :requested-model requested-model
+                  :resolved-model requested-model
+                  :upgrade-path (list requested-model))
+          (let* ((path
+                  (codex-ide-config--resolve-model-upgrades
+                   requested-model models))
+                 (resolved-model (car (last path)))
+                 (entry
+                  (codex-ide-config--model-entry-by-name
+                   models resolved-model)))
+            (codex-ide-config--validate-preset-effort
+             values entry resolved-model)
+            (setq values (plist-put values 'model resolved-model))
+            (list :values values
+                  :model-status (if (cdr path) 'upgraded 'unchanged)
+                  :requested-model requested-model
+                  :resolved-model resolved-model
+                  :upgrade-path path)))))))
+
+(defun codex-ide-config-apply-preset-with-result
+    (preset scope &optional session)
+  "Resolve and apply PRESET using SCOPE for SESSION.
+Return resolution metadata plus `:count' for affected live sessions."
+  (let* ((result (codex-ide-config-resolve-preset preset session))
+         (count (codex-ide-config-apply-values
+                 (plist-get result :values) scope session)))
+    (plist-put result :count count)))
+
 (defun codex-ide-config-apply-preset (preset scope &optional session)
-  "Apply config PRESET using SCOPE for SESSION."
-  (codex-ide-config-apply-values
-   (codex-ide-config--preset-values preset)
-   scope
-   session))
+  "Apply config PRESET using SCOPE for SESSION.
+Return the number of live sessions affected."
+  (plist-get
+   (codex-ide-config-apply-preset-with-result preset scope session)
+   :count))
 
 (defun codex-ide-config-format-preset (preset)
   "Return a compact display string for PRESET."
