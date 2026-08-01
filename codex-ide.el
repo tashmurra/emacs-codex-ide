@@ -236,6 +236,18 @@ When nil, inline diffs never start folded."
   :group 'codex-ide)
 
 ;;;###autoload
+(defcustom codex-ide-approvals-reviewer "inherit"
+  "Reviewer for approvals on new or resumed Codex threads and later turns.
+When set to \"inherit\", omit the app-server override and honor the Codex CLI
+or global configuration.  \"user\" presents approvals to the user, while
+\"auto_review\" lets Codex review them automatically.  `guardian_subagent'
+remains a legacy Codex CLI/config alias and is intentionally not a UI choice."
+  :type '(choice (const :tag "Inherit Codex configuration" "inherit")
+                 (const :tag "User" "user")
+                 (const :tag "Auto review" "auto_review"))
+  :group 'codex-ide)
+
+;;;###autoload
 (defcustom codex-ide-sandbox-mode "workspace-write"
   "Sandbox mode for new or resumed Codex threads and later turns."
   :type '(choice (const "read-only")

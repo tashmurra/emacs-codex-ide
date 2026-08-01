@@ -41,6 +41,45 @@
 				    (should (equal (codex-ide-config-effective-value 'sandbox-mode session)
 						   "workspace-write")))))))
 
+(ert-deftest codex-ide-approvals-reviewer-defaults-and-session-overrides ()
+  (should (equal (default-value 'codex-ide-approvals-reviewer) "inherit"))
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (codex-ide-approvals-reviewer "inherit"))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (should (equal
+                   (codex-ide-config-effective-value
+                    'approvals-reviewer session)
+                   "inherit"))
+          (should-not
+           (codex-ide-config-effective-approvals-reviewer session))
+          (codex-ide-config-set-session-value
+           'approvals-reviewer "user" session)
+          (should (equal
+                   (codex-ide-config-effective-approvals-reviewer session)
+                   "user")))))))
+
+(ert-deftest codex-ide-approvals-reviewer-history-restores-session-value ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (codex-ide-config-history nil)
+        (codex-ide-approvals-reviewer "inherit"))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (codex-ide-config-apply
+           'approvals-reviewer "auto_review" 'this-session session)
+          (should (equal
+                   (codex-ide-config-effective-approvals-reviewer session)
+                   "auto_review"))
+          (should (string-match-p
+                   (regexp-quote "approvals reviewer=auto_review")
+                   (codex-ide-config-format-history-entry
+                    (car codex-ide-config-history))))
+          (codex-ide-config-restore-last)
+          (should-not
+           (codex-ide-config-effective-approvals-reviewer session)))))))
+
 (ert-deftest codex-ide-config-effective-value-uses-session-buffer-dir-locals ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (class (gensym "codex-ide-test-dir-locals")))
@@ -818,6 +857,7 @@
 
 (ert-deftest codex-ide-config-applies-to-live-session-p-flags-turn-scoped-settings ()
   (should (codex-ide-config-applies-to-live-session-p 'approval-policy))
+  (should (codex-ide-config-applies-to-live-session-p 'approvals-reviewer))
   (should (codex-ide-config-applies-to-live-session-p 'sandbox-mode))
   (should (codex-ide-config-applies-to-live-session-p 'fast))
   (should (codex-ide-config-applies-to-live-session-p 'reasoning-effort))
@@ -859,6 +899,7 @@
         (codex-ide-model "gpt-5.4")
         (codex-ide-fast "off")
         (codex-ide-approval-policy "on-request")
+        (codex-ide-approvals-reviewer "inherit")
         (codex-ide-sandbox-mode "workspace-write")
         (codex-ide-personality "pragmatic"))
     (codex-ide-test-with-fixture project-dir
@@ -867,11 +908,13 @@
 				    (codex-ide-config-set-session-value 'model "gpt-5.4-mini" session)
 				    (codex-ide-config-set-session-value 'fast "on" session)
 				    (codex-ide-config-set-session-value 'approval-policy "never" session)
+				    (codex-ide-config-set-session-value 'approvals-reviewer "user" session)
 				    (codex-ide-config-set-session-value 'sandbox-mode "read-only" session)
 				    (codex-ide-config-set-session-value 'personality "friendly" session)
 				    (should (equal (codex-ide--thread-start-params session)
 						   `((cwd . ,(codex-ide--get-working-directory))
 						     (approvalPolicy . "never")
+						     (approvalsReviewer . "user")
 						     (sandbox . "read-only")
 						     (personality . "friendly")
 						     (config
@@ -880,11 +923,36 @@
 						     (model . "gpt-5.4-mini")
 						     (serviceTier . "priority")))))))))
 
+(ert-deftest codex-ide-thread-params-omit-or-send-approvals-reviewer ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (codex-ide-approvals-reviewer "inherit"))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (should-not
+           (assq 'approvalsReviewer
+                 (codex-ide--thread-start-params session)))
+          (should-not
+           (assq 'approvalsReviewer
+                 (codex-ide--thread-resume-params "thread-1" session)))
+          (codex-ide-config-set-session-value
+           'approvals-reviewer "auto_review" session)
+          (should (equal
+                   (alist-get 'approvalsReviewer
+                              (codex-ide--thread-start-params session))
+                   "auto_review"))
+          (should (equal
+                   (alist-get 'approvalsReviewer
+                              (codex-ide--thread-resume-params
+                               "thread-1" session))
+                   "auto_review")))))))
+
 (ert-deftest codex-ide-submit-uses-session-aware-turn-config ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (codex-ide-model "gpt-5.4")
         (codex-ide-fast "off")
         (codex-ide-approval-policy "on-request")
+        (codex-ide-approvals-reviewer "inherit")
         (codex-ide-sandbox-mode "workspace-write")
         (codex-ide-reasoning-effort "medium")
         (codex-ide-personality "pragmatic")
@@ -894,6 +962,8 @@
 				  (let ((session (codex-ide--create-process-session)))
 				    (setf (codex-ide-session-thread-id session) "thread-config-1")
 				    (codex-ide-config-set-session-value 'approval-policy "never" session)
+				    (codex-ide-config-set-session-value
+				     'approvals-reviewer "auto_review" session)
 				    (codex-ide-config-set-session-value 'sandbox-mode "read-only" session)
 				    (codex-ide-config-set-session-value 'model "gpt-5.4-mini" session)
 				    (codex-ide-config-set-session-value 'fast "on" session)
@@ -907,12 +977,41 @@
 						   nil)))
 					(codex-ide--submit-prompt)))
 				    (should (equal (alist-get 'approvalPolicy submitted) "never"))
+				    (should (equal (alist-get 'approvalsReviewer submitted)
+						   "auto_review"))
 				    (should (equal (alist-get 'sandboxPolicy submitted)
 						   '((type . "readOnly"))))
 				    (should (equal (alist-get 'model submitted) "gpt-5.4-mini"))
 				    (should (equal (alist-get 'serviceTier submitted) "priority"))
 				    (should (equal (alist-get 'effort submitted) "high"))
 				    (should (equal (alist-get 'personality submitted) "friendly")))))))
+
+(ert-deftest codex-ide-turn-params-inherit-omits-approvals-reviewer ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (codex-ide-approvals-reviewer "inherit"))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (should-not
+           (assq 'approvalsReviewer
+                 (codex-ide--turn-start-params
+                  session "thread-1" '((input . []))))))))))
+
+(ert-deftest codex-ide-approvals-reviewer-is-compared-with-reported-config ()
+  (let* ((submitted
+          (codex-ide--turn-config-snapshot
+           '((threadId . "thread-1")
+             (approvalsReviewer . "user")
+             (input . []))))
+         (reported
+          (codex-ide--reported-turn-config
+           '((threadSettings
+              . ((approvalsReviewer . "auto_review")))))))
+    (should (equal submitted '((approvalsReviewer . "user"))))
+    (should (equal reported '((approvalsReviewer . "auto_review"))))
+    (should (equal
+             (codex-ide--turn-config-mismatches submitted reported)
+             '((approvalsReviewer "user" "auto_review"))))))
 
 (provide 'codex-ide-config-tests)
 

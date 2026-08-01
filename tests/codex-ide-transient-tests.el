@@ -109,6 +109,7 @@
 (ert-deftest codex-ide-agent-config-menu-exposes-agent-setting-suffixes-with-lowercase-mnemonics ()
   (should (transient-get-suffix 'codex-ide-agent-config-menu "p"))
   (should (transient-get-suffix 'codex-ide-agent-config-menu "f"))
+  (should (transient-get-suffix 'codex-ide-agent-config-menu "v"))
   (should (transient-get-suffix 'codex-ide-agent-config-menu "s")))
 
 (ert-deftest codex-ide-agent-config-menu-omits-non-agent-suffixes ()
@@ -191,23 +192,26 @@
                                         suffix :description))
                                      agent-suffixes)))
     (should (equal descriptions '("Agent Config" "Presets" "Actions" "Navigation")))
-    (should (equal keys '("m" "f" "r" "a" "s" "p")))
+    (should (equal keys '("m" "f" "r" "a" "v" "s" "p")))
     (should (equal actions-keys '("o" "h")))
     (should (equal navigation-keys '("DEL" "C-g")))
     (should (member "o" actions-keys))
     (should (member "h" actions-keys))
     (should-error (transient-get-suffix 'codex-ide-agent-config-menu "q"))
-    (should (equal agent-descriptions '(nil nil nil nil nil nil)))))
+    (should (equal agent-descriptions '(nil nil nil nil nil nil nil)))))
 
 (ert-deftest codex-ide-agent-config-menu-agent-labels-show-current-values ()
   (let ((codex-ide-model "gpt-5.4")
         (codex-ide-fast "on")
-        (codex-ide-reasoning-effort "high"))
+        (codex-ide-reasoning-effort "high")
+        (codex-ide-approvals-reviewer "inherit"))
     (let ((model-label (codex-ide--config-menu-agent-value-label 'model))
           (fast-label (codex-ide--config-menu-agent-value-label
                        'fast))
           (effort-label (codex-ide--config-menu-agent-value-label
-                         'reasoning-effort)))
+                         'reasoning-effort))
+          (reviewer-label (codex-ide--config-menu-agent-value-label
+                           'approvals-reviewer)))
       (should (equal (substring-no-properties model-label)
                      "Model gpt-5.4"))
       (should (eq (get-text-property 6 'face model-label)
@@ -219,6 +223,10 @@
       (should (equal (substring-no-properties effort-label)
                      "Reasoning effort high"))
       (should (eq (get-text-property 17 'face effort-label)
+                  'transient-inactive-value))
+      (should (equal (substring-no-properties reviewer-label)
+                     "Approvals reviewer inherit"))
+      (should (eq (get-text-property 19 'face reviewer-label)
                   'transient-inactive-value)))))
 
 (ert-deftest codex-ide-agent-config-menu-preset-labels-show-current-preset-names ()
@@ -262,6 +270,7 @@
         (codex-ide-config-history nil)
         (codex-ide-config--history-group nil)
         (codex-ide-approval-policy "on-request")
+        (codex-ide-approvals-reviewer "inherit")
         (codex-ide-sandbox-mode "workspace-write"))
     (codex-ide-test-with-fixture project-dir
       (codex-ide-test-with-fake-processes
@@ -274,6 +283,7 @@
                           'this-session))
               (should codex-ide-agent-config-menu--history-interaction-id)
               (codex-ide--set-approval-policy "never")
+              (codex-ide--set-approvals-reviewer "user")
               (codex-ide--set-sandbox-mode "read-only")
               (should-not codex-ide-config-history)
               (codex-ide--config-menu-commit-history-group)
@@ -293,6 +303,9 @@
                          (regexp-quote "approval policy=never")
                          formatted))
                 (should (string-match-p
+                         (regexp-quote "approvals reviewer=user")
+                         formatted))
+                (should (string-match-p
                          (regexp-quote "sandbox mode=read-only")
                          formatted))))))))))
 
@@ -305,6 +318,7 @@
         (codex-ide-config-history nil)
         (codex-ide-config--history-group nil)
         (codex-ide-approval-policy "on-request")
+        (codex-ide-approvals-reviewer "user")
         (codex-ide-sandbox-mode "workspace-write")
         (codex-ide-reasoning-effort "medium"))
     (cl-letf (((symbol-function 'message)
@@ -315,6 +329,7 @@
              command)))
     (should (equal codex-ide-sandbox-mode "read-only"))
     (should (equal codex-ide-approval-policy "on-request"))
+    (should (equal codex-ide-approvals-reviewer "user"))
     (should (equal codex-ide-reasoning-effort "medium"))))
 
 (ert-deftest codex-ide-apply-config-preset-prompts-and-applies-preset ()
@@ -381,12 +396,14 @@
         (codex-ide-fast "on")
         (codex-ide-reasoning-effort "medium")
         (codex-ide-approval-policy "on-request")
+        (codex-ide-approvals-reviewer "inherit")
         (codex-ide-sandbox-mode "workspace-write")
         (codex-ide-personality "pragmatic"))
     (dolist (command '(codex-ide--set-model
                        codex-ide--set-fast
                        codex-ide--set-reasoning-effort
                        codex-ide--set-approval-policy
+                       codex-ide--set-approvals-reviewer
                        codex-ide--set-personality
                        codex-ide--set-sandbox-mode))
       (let ((obj (transient-suffix-object command)))
@@ -447,6 +464,7 @@
 (ert-deftest codex-ide-save-config-persists-reasoning-effort ()
   (let ((codex-ide-reasoning-effort "high")
         (codex-ide-fast "on")
+        (codex-ide-approvals-reviewer "auto_review")
         (codex-ide-image-detail "high")
         (codex-ide-new-session-split 'vertical)
         (codex-ide-running-submit-action 'queue)
@@ -459,6 +477,8 @@
                    "high"))
     (should (equal (alist-get 'codex-ide-fast saved)
                    "on"))
+    (should (equal (alist-get 'codex-ide-approvals-reviewer saved)
+                   "auto_review"))
     (should (equal (alist-get 'codex-ide-image-detail saved)
                    "high"))
     (should (eq (alist-get 'codex-ide-new-session-split saved)
@@ -514,6 +534,22 @@
 				    (should (equal codex-ide-sandbox-mode "workspace-write"))
 				    (should (equal (codex-ide-config-effective-value 'sandbox-mode session)
 						   "read-only")))))))
+
+(ert-deftest codex-ide-set-approvals-reviewer-can-target-current-session ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (codex-ide-approvals-reviewer "inherit")
+        (codex-ide-agent-config-menu-scope 'this-session))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (cl-letf (((symbol-function 'message)
+                       (lambda (&rest _) nil)))
+              (codex-ide--set-approvals-reviewer "user")))
+          (should (equal codex-ide-approvals-reviewer "inherit"))
+          (should (equal
+                   (codex-ide-config-effective-approvals-reviewer session)
+                   "user")))))))
 
 (ert-deftest codex-ide-set-approval-policy-signals-quit-when-called-directly ()
   (let ((applied nil))

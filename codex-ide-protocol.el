@@ -46,6 +46,7 @@
   "Model entries cached for the duration of one combined picker interaction.")
 (defvar codex-ide-fast)
 (defvar codex-ide-approval-policy)
+(defvar codex-ide-approvals-reviewer)
 (defvar codex-ide-sandbox-mode)
 (defvar codex-ide-personality)
 (defvar codex-ide-thread-list-default-limit)
@@ -161,6 +162,10 @@
             (approvalPolicy . ,(codex-ide-config-effective-value
                                 'approval-policy
                                 session))
+            ,@(when-let* ((reviewer
+                           (codex-ide-config-effective-approvals-reviewer
+                            session)))
+                `((approvalsReviewer . ,reviewer)))
             (sandbox . ,(codex-ide-config-effective-value 'sandbox-mode session))
             (personality . ,(codex-ide-config-effective-value 'personality session))
             ,@(when config
@@ -197,6 +202,10 @@
             (approvalPolicy . ,(codex-ide-config-effective-value
                                 'approval-policy
                                 session))
+            ,@(when-let* ((reviewer
+                           (codex-ide-config-effective-approvals-reviewer
+                            session)))
+                `((approvalsReviewer . ,reviewer)))
             (sandbox . ,(codex-ide-config-effective-value 'sandbox-mode session))
             (personality . ,(codex-ide-config-effective-value 'personality session))
             ,@(when config
